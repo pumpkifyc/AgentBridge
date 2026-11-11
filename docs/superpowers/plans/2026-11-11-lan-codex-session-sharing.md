@@ -48,7 +48,7 @@ src/**/*.test.tsx            界面行为测试
 e2e/                         打包应用的跨平台验收检查
 ```
 
-## 任务 1：初始化跨平台桌面应用
+## Task 1：初始化跨平台桌面应用
 
 **文件：**
 - 新建：`package.json`、`vite.config.ts`、`tsconfig.json`、`index.html`
@@ -65,7 +65,7 @@ e2e/                         打包应用的跨平台验收检查
 - [x] 运行 `npm run build` 和 `cargo check --manifest-path src-tauri/Cargo.toml`。
 - [ ] 在对应原生 Runner 上构建平台安装包；macOS 本地包已生成，Windows 包待 Windows 原生 Runner 验证；开发构建与正式签名、公证的要求分开记录。
 
-## 任务 2：定义并校验快照协议
+## Task 2：定义并校验快照协议
 
 **文件：**
 - 新建：`src-tauri/src/snapshot/mod.rs`
@@ -85,7 +85,7 @@ e2e/                         打包应用的跨平台验收检查
 - [ ] 实现带类型的 serde 模型，并用文本条目白名单进行转换；持久化快照前过滤已知凭据格式，若发生脱敏则在预览中提示。
 - [ ] 运行 `cargo test --manifest-path src-tauri/Cargo.toml snapshot`。
 
-## 任务 3：读取本机 Codex 会话
+## Task 3：读取本机 Codex 会话
 
 **文件：**
 - 新建：`src-tauri/src/codex/mod.rs`
@@ -106,7 +106,7 @@ e2e/                         打包应用的跨平台验收检查
 - [ ] 验证启动 Codex 时不使用 shell 字符串插值。
 - [ ] 运行 `cargo test --manifest-path src-tauri/Cargo.toml codex`，并在本机 Codex 安装上手动读取会话。
 
-## 任务 4：实现分享方会话选择和预览
+## Task 4：实现分享方会话选择和预览
 
 **文件：**
 - 新建：`src/features/share/SharePage.tsx`
@@ -126,7 +126,7 @@ e2e/                         打包应用的跨平台验收检查
 - [ ] 实现带类型的 Tauri 命令调用与会话预览，不暴露原始工具参数。
 - [ ] 运行 `npm test -- --run src/features/share/SharePage.test.tsx` 和 `npm run build`。
 
-## 任务 5：实现局域网邀请和加密传输
+## Task 5：实现局域网邀请和加密传输
 
 **文件：**
 - 新建：`src-tauri/src/pairing/mod.rs`
@@ -149,7 +149,7 @@ e2e/                         打包应用的跨平台验收检查
 - [ ] 只绑定到所选局域网接口，并提供明确的取消/过期状态转换。
 - [ ] 运行 `cargo test --manifest-path src-tauri/Cargo.toml lan_transfer`。
 
-## 任务 6：构建配对与分享方界面
+## Task 6：构建配对与分享方界面
 
 **文件：**
 - 新建：`src/features/share/PairingPanel.tsx`
@@ -167,7 +167,7 @@ e2e/                         打包应用的跨平台验收检查
 - [ ] 确认前端日志和错误信息中不包含邀请凭据或会话正文。
 - [ ] 运行分享方界面测试和 `npm run build`。
 
-## 任务 7：接收、预览并批准分享快照
+## Task 7：接收、预览并批准分享快照
 
 **文件：**
 - 新建：`src/features/receive/ReceivePage.tsx`
@@ -186,7 +186,7 @@ e2e/                         打包应用的跨平台验收检查
 - [ ] 实现接收方确认和快照本地暂存，并提供明确的重试/删除操作。
 - [ ] 运行接收界面测试和快照校验测试。
 
-## 任务 8：创建接收方本机 Codex 续接会话
+## Task 8：创建接收方本机 Codex 续接会话
 
 **文件：**
 - 新建：`src-tauri/src/imports/mod.rs`
@@ -213,7 +213,7 @@ e2e/                         打包应用的跨平台验收检查
 - [ ] 验证新建 thread 在 macOS 和 Windows Codex 桌面版中是否可见且可继续；记录最低测试版本，不支持时启用后备方案。
 - [ ] 运行 `cargo test --manifest-path src-tauri/Cargo.toml imports` 和导入界面测试。
 
-## 任务 9：导入历史、重试与数据删除
+## Task 9：导入历史、重试与数据删除
 
 **文件：**
 - 修改：`src-tauri/src/imports/history.rs`
@@ -230,7 +230,7 @@ e2e/                         打包应用的跨平台验收检查
 - [ ] 实现导入历史页面和删除确认。
 - [ ] 运行历史测试及完整 Rust/前端测试。
 
-## 任务 10：跨平台打包与验收
+## Task 10：跨平台打包与验收
 
 **文件：**
 - 修改：`src-tauri/tauri.conf.json`
