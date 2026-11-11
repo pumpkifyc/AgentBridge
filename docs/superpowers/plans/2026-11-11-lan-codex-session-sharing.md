@@ -60,10 +60,10 @@ e2e/                         打包应用的跨平台验收检查
 - 可运行的 Tauri 桌面窗口，包含占位首页和应用标识。
 - 开发命令：`npm run tauri dev`；发布构建命令：`npm run tauri build`。
 
-- [ ] 生成启用 macOS 和 Windows 目标平台的 Tauri 2 React/TypeScript 项目框架。
-- [ ] 添加冒烟测试，打开应用后检查窗口标题和空状态标题。
-- [ ] 运行 `npm run build` 和 `cargo check --manifest-path src-tauri/Cargo.toml`。
-- [ ] 在对应原生 Runner 上构建平台安装包；开发构建与正式签名、公证的要求分开记录。
+- [x] 生成启用 macOS 和 Windows 目标平台的 Tauri 2 React/TypeScript 项目框架。
+- [x] 添加冒烟测试，打开应用后检查窗口标题和空状态标题。
+- [x] 运行 `npm run build` 和 `cargo check --manifest-path src-tauri/Cargo.toml`。
+- [ ] 在对应原生 Runner 上构建平台安装包；macOS 本地包已生成，Windows 包待 Windows 原生 Runner 验证；开发构建与正式签名、公证的要求分开记录。
 
 ## 任务 2：定义并校验快照协议
 
