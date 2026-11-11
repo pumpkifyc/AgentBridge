@@ -80,10 +80,10 @@ e2e/                         打包应用的跨平台验收检查
 - `validate_snapshot(bytes: &[u8]) -> Result<SnapshotV1, SnapshotError>` 校验 schema 版本；序列化数据最大 20 MiB；最多 10,000 条消息；单个文本字段最大 1 MiB；时间顺序必须有效。
 - `convert_codex_items(thread: ThreadData, cutoff_turn_id: Option<String>) -> Result<SnapshotV1, SnapshotError>` 排除二进制内容、凭据/配置和可执行工具参数；对不支持或被截断的条目添加警告。
 
-- [ ] 为有效的有序对话、较早的已完成轮次截止、不支持条目警告、工具调用排除、分享方路径只作为元数据，以及消息正文和工具结果中常见 API Key/token/password 格式脱敏编写测试。
-- [ ] 编写未知 schema 版本、格式错误 JSON、超大数据、消息数量超限、单条消息超长和顺序无效的拒绝测试。
-- [ ] 实现带类型的 serde 模型，并用文本条目白名单进行转换；持久化快照前过滤已知凭据格式，若发生脱敏则在预览中提示。
-- [ ] 运行 `cargo test --manifest-path src-tauri/Cargo.toml snapshot`。
+- [x] 为有效的有序对话、较早的已完成轮次截止、不支持条目警告、工具调用排除、分享方路径只作为元数据，以及消息正文和工具结果中常见 API Key/token/password 格式脱敏编写测试。
+- [x] 编写未知 schema 版本、格式错误 JSON、超大数据、消息数量超限、单条消息超长和顺序无效的拒绝测试。
+- [x] 实现带类型的 serde 模型，并用文本条目白名单进行转换；持久化快照前过滤已知凭据格式，若发生脱敏则在预览中提示。
+- [x] 运行 `cargo test --manifest-path src-tauri/Cargo.toml snapshot`。
 
 ## Task 3：读取本机 Codex 会话
 
