@@ -14,7 +14,7 @@ Task 9: complete (commits 3cbfc44..0a31118, `npm test -- --run` → 38 passed; f
 Task 10: complete (commits 0a31118..9970be6, `npm test -- --run` → 38 passed; `npm run test:e2e-config` → 5 passed; `npm run tauri:build` → macOS `.app` and `.dmg`; full Rust tests → 61 passed, 1 ignored; clippy PASS)
 Final review: self-review (no subagent tool)
 Final: fixed share-page recovery — `Codex 不可用错误显示可执行的说明` RED→GREEN, suite 38/38 (`39733f9`).
-Final: fixed import/retry staged-path validation — `importing_a_staged_snapshot_checks_its_filename_and_staging_directory` RED→GREEN, suite 6/6; final green suite: frontend 38 passed, Rust 62 passed + 1 ignored, config 5 passed, `npm run build` PASS, clippy PASS (`39733f9`).
+Final: fixed import/retry staged-path validation — `importing_a_staged_snapshot_checks_its_filename_and_staging_directory` RED→GREEN, suite 6/6; final green suite: frontend 38 passed, Rust 60 passed + 1 ignored, config 5 passed, `npm run build` PASS, clippy PASS (`39733f9`).
 Final: Ruling: Windows native build, GitHub runner execution, bidirectional LAN transfer and desktop-history visibility remain release-time manual gates documented in Chinese — one macOS machine cannot prove them — the cost if wrong is a release blocker until two machines and a supported Codex version are tested.
 Final: minor (deferred): `open_import` currently returns a pasteable-prompt fallback because no public Codex desktop deep link is verified; record the supported deep link when one is published.
 Final: minor (deferred): Import retry appends a diagnosable failed record; collapse retry attempts into one visible row after users confirm the preferred history model.
