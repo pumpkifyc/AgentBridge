@@ -340,6 +340,21 @@ impl CodexClient {
         Ok(result.thread.id)
     }
 
+    pub fn find_thread(&mut self, thread_id: &str) -> Result<Option<ThreadSummary>, CodexError> {
+        let mut cursor = None;
+        for _ in 0..MAX_TURN_PAGES {
+            let page = self.list_threads(cursor)?;
+            if let Some(thread) = page.data.into_iter().find(|thread| thread.id == thread_id) {
+                return Ok(Some(thread));
+            }
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        Ok(None)
+    }
+
     pub fn start_turn(&mut self, thread_id: &str, cwd: &str, text: &str) -> Result<(), CodexError> {
         let response = self.request(
             "turn/start",

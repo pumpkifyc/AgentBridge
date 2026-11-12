@@ -427,6 +427,32 @@ select {
   font-size: 12px;
 }
 
+.project-picker input {
+  flex: 1;
+  min-width: 0;
+}
+
+.history-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.history-row {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid #dce3eb;
+  border-radius: 8px;
+}
+
+.history-row small {
+  color: #68727f;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 800px) {
   .main-nav,
   .page-content {

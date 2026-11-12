@@ -1,22 +1,23 @@
 use crate::{
     codex::{client::CodexClient, error::CodexError, models::Page},
+    db::ImportDatabase,
+    imports::{ImportError, ImportRecord, ImportService},
     pairing::{InvitationManager, InvitationState},
     snapshot::{schema::SnapshotV1, validate::validate_snapshot},
     transfer::TransferServer,
 };
 use serde::{Deserialize, Serialize};
-use sha2::Digest;
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs,
     sync::{Arc, Mutex},
-    time::Duration,
 };
 use tauri::{Manager, Runtime as TauriRuntime, State, WebviewWindow, ipc::Channel};
+use tauri_plugin_dialog::DialogExt;
 use tokio::{runtime::{Builder, Runtime}, task::AbortHandle};
 
 const MIN_COMPATIBLE_CLI: (u32, u32, u32) = (0, 142, 2);
-const IMPORT_TURN_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -297,18 +298,6 @@ pub struct ReceivedPreview {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ImportRecord {
-    pub id: String,
-    pub source_title: String,
-    pub local_thread_id: String,
-    pub project_path: String,
-    pub imported_at: i64,
-    pub snapshot_path: String,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SnapshotPreviewText {
     pub messages: Vec<String>,
     pub continuation_prompt: String,
@@ -331,7 +320,7 @@ pub struct ReceiveState {
     pub transfers: Mutex<HashMap<String, AbortHandle>>,
     pub staged: Mutex<HashMap<String, StagedSnapshot>>,
     pub progress: Mutex<Vec<serde_json::Value>>,
-    pub imports: Mutex<Vec<ImportRecord>>,
+    pub import_service: Arc<ImportService>,
     pub runtime: Runtime,
 }
 
@@ -342,7 +331,7 @@ impl Default for ReceiveState {
             transfers: Mutex::new(HashMap::new()),
             staged: Mutex::new(HashMap::new()),
             progress: Mutex::new(Vec::new()),
-            imports: Mutex::new(Vec::new()),
+            import_service: Arc::new(ImportService::default()),
             runtime: Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
@@ -577,70 +566,226 @@ pub fn delete_staged_snapshot(
 pub struct ImportRequest {
     pub share_id: String,
     pub project_path: String,
-    pub snapshot: SnapshotV1,
 }
 
 #[tauri::command]
 pub fn import_snapshot(
+    window: WebviewWindow<impl TauriRuntime>,
     state: State<'_, ReceiveState>,
     request: ImportRequest,
 ) -> Result<ImportRecord, CommandError> {
-    let bytes = serde_json::to_vec(&request.snapshot)
-        .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
+    let staged = state
+        .staged
+        .lock()
+        .expect("暂存锁已中毒")
+        .get(&request.share_id)
+        .cloned()
+        .ok_or_else(|| CommandError::new("notFound", "找不到本机暂存快照，请重新接收分享"))?;
+    let snapshot_path = std::path::PathBuf::from(&staged.snapshot_path);
+    let bytes = fs::read(&snapshot_path)
+        .map_err(|error| CommandError::new("invalidSnapshot", format!("读取暂存快照失败：{error}")))?;
     let snapshot = validate_snapshot(&bytes)
         .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
-    let project = std::path::Path::new(&request.project_path);
-    if !project.is_dir() {
+    let staged_digest = hex::encode(Sha256::digest(request.share_id.as_bytes()));
+    let expected_filename = format!("{staged_digest}.json");
+    if snapshot_path.file_name().and_then(|name| name.to_str()) != Some(expected_filename.as_str()) {
         return Err(CommandError::new(
-            "invalidProject",
-            "请选择接收方电脑上存在的项目目录",
+            "invalidSnapshot",
+            "暂存快照与分享标识不匹配，请重新接收分享",
         ));
     }
-    let prompt = crate::imports::build_continuation_prompt(&snapshot);
-    let mut client = CodexClient::connect().map_err(CommandError::from)?;
-    let local_thread_id = client
-        .start_thread(&request.project_path)
-        .map_err(CommandError::from)?;
-    client
-        .start_turn(&local_thread_id, &request.project_path, &prompt)
-        .map_err(CommandError::from)?;
-    client
-        .wait_for_turn_completion(IMPORT_TURN_TIMEOUT)
-        .map_err(CommandError::from)?;
-    let record = ImportRecord {
-        id: format!("import-{}", hex::encode(sha2::Sha256::digest(local_thread_id.as_bytes()))),
-        source_title: snapshot.metadata.title,
-        local_thread_id,
-        project_path: request.project_path,
-        imported_at: crate::pairing::invitation::unix_seconds(),
-        snapshot_path: format!("{}", std::path::Path::new(&request.share_id).display()),
-        status: "已完成".into(),
-    };
+    let project = std::path::Path::new(&request.project_path);
+    let database_path = window
+        .path()
+        .app_data_dir()
+        .map_err(|error| CommandError::new("databaseFailed", format!("无法定位应用数据目录：{error}")))?
+        .join("imports.db");
+    let database = ImportDatabase::open(database_path)
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
     state
-        .imports
-        .lock()
-        .expect("导入记录锁已中毒")
-        .push(record.clone());
+        .import_service
+        .create_local_thread(&snapshot, project, &snapshot_path, &database)
+        .map_err(map_import_error)
+}
+
+#[tauri::command]
+pub fn list_imports(
+    window: WebviewWindow<impl TauriRuntime>,
+) -> Result<Vec<ImportRecord>, CommandError> {
+    let database_path = window
+        .path()
+        .app_data_dir()
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?
+        .join("imports.db");
+    ImportDatabase::open(database_path)
+        .and_then(|database| database.list())
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))
+}
+
+#[tauri::command]
+pub fn retry_import(
+    window: WebviewWindow<impl TauriRuntime>,
+    state: State<'_, ReceiveState>,
+    import_id: String,
+) -> Result<ImportRecord, CommandError> {
+    let database = open_database(&window)?;
+    let previous = database
+        .get(&import_id)
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?
+        .ok_or_else(|| CommandError::new("notFound", "找不到导入记录"))?;
+    database
+        .mark_retried(&import_id, crate::pairing::invitation::unix_seconds())
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
+    let snapshot_path = std::path::PathBuf::from(&previous.snapshot_path);
+    let bytes = fs::read(&snapshot_path)
+        .map_err(|error| CommandError::new("invalidSnapshot", format!("读取暂存快照失败：{error}")))?;
+    let snapshot = validate_snapshot(&bytes)
+        .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
+    let mut record = state
+        .import_service
+        .create_local_thread(
+            &snapshot,
+            std::path::Path::new(&previous.project_path),
+            &snapshot_path,
+            &database,
+        )
+        .map_err(map_import_error)?;
+    record.id = import_id;
+    record.retry_count = previous.retry_count + 1;
+    database
+        .upsert(&record)
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
     Ok(record)
 }
 
 #[tauri::command]
-pub fn list_imports(state: State<'_, ReceiveState>) -> Result<Vec<ImportRecord>, CommandError> {
-    Ok(state
-        .imports
-        .lock()
-        .expect("导入记录锁已中毒")
-        .clone())
+pub fn open_import(
+    window: WebviewWindow<impl TauriRuntime>,
+    state: State<'_, ReceiveState>,
+    import_id: String,
+) -> Result<(), CommandError> {
+    let database = open_database(&window)?;
+    let record = database
+        .get(&import_id)
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?
+        .ok_or_else(|| CommandError::new("notFound", "找不到导入记录"))?;
+    if record.status != "completed" || record.local_thread_id.is_empty() {
+        return Err(CommandError::new(
+            "notCompleted",
+            "该导入尚未创建本机会话，请重试或复制续接提示",
+        ));
+    }
+    if !state
+        .import_service
+        .thread_exists(&record.local_thread_id)
+    {
+        return Err(CommandError::new(
+            "threadMissing",
+            "本机 Codex 会话已不在公开会话列表中，请复制续接提示后手动新建会话",
+        ));
+    }
+    let opener = crate::imports::history::CodexOpener::default();
+    opener
+        .open_thread(
+            &record.local_thread_id,
+            record.continuation_prompt.as_deref().unwrap_or_default(),
+        )
+        .map_err(|error| CommandError::new("openUnsupported", error.to_string()))
 }
 
 #[tauri::command]
-pub fn delete_import(state: State<'_, ReceiveState>, import_id: String) -> Result<(), CommandError> {
-    let mut imports = state.imports.lock().expect("导入记录锁已中毒");
-    let before = imports.len();
-    imports.retain(|record| record.id != import_id);
-    if imports.len() == before {
-        return Err(CommandError::new("notFound", "找不到导入记录"));
+pub fn copy_continuation_prompt(
+    window: WebviewWindow<impl TauriRuntime>,
+    import_id: String,
+) -> Result<String, CommandError> {
+    let database = open_database(&window)?;
+    database
+        .get(&import_id)
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?
+        .and_then(|record| record.continuation_prompt)
+        .ok_or_else(|| CommandError::new("notFound", "找不到保留的续接提示"))
+}
+
+#[tauri::command]
+pub fn delete_import(
+    window: WebviewWindow<impl TauriRuntime>,
+    state: State<'_, ReceiveState>,
+    import_id: String,
+) -> Result<(), CommandError> {
+    let database_path = window
+        .path()
+        .app_data_dir()
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?
+        .join("imports.db");
+    let record = ImportDatabase::open(database_path)
+        .and_then(|database| {
+            let record = database.get(&import_id)?;
+            database.delete(&import_id)?;
+            Ok(record)
+        })
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
+    if let Some(record) = record
+        && !record.snapshot_path.is_empty()
+    {
+                state
+                    .staged
+                    .lock()
+                    .expect("暂存锁已中毒")
+                    .retain(|_, staged| staged.snapshot_path != record.snapshot_path);
+                let snapshot = std::path::Path::new(&record.snapshot_path);
+                if snapshot.starts_with(
+                    window
+                        .path()
+                        .app_data_dir()
+                        .unwrap_or_default()
+                        .join("staged-snapshots"),
+                ) {
+                    let _ = fs::remove_file(snapshot);
+                }
     }
     Ok(())
+}
+
+fn open_database(
+    window: &WebviewWindow<impl TauriRuntime>,
+) -> Result<ImportDatabase, CommandError> {
+    let database_path = window
+        .path()
+        .app_data_dir()
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?
+        .join("imports.db");
+    ImportDatabase::open(database_path)
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))
+}
+
+#[tauri::command]
+pub async fn select_project_directory(
+    window: WebviewWindow<impl TauriRuntime>,
+) -> Result<Option<String>, CommandError> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    window
+        .dialog()
+        .file()
+        .set_title("选择接收方本机项目目录")
+        .pick_folder(move |selected| {
+            let _ = sender.send(
+                selected.and_then(|path| path.into_path().ok()).map(|path| {
+                    path.to_string_lossy().into_owned()
+                }),
+            );
+        });
+    receiver
+        .await
+        .map_err(|_| CommandError::new("dialogFailed", "目录选择器未返回结果"))
+}
+
+fn map_import_error(error: ImportError) -> CommandError {
+    let code = match &error {
+        ImportError::InvalidProject(_) => "invalidProject",
+        ImportError::PromptTooLarge | ImportError::Snapshot(_) => "invalidSnapshot",
+        ImportError::Codex(_) => "codexUnavailable",
+        ImportError::Store(_) => "databaseFailed",
+    };
+    CommandError::new(code, error.to_string())
 }
 

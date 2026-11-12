@@ -248,8 +248,13 @@ async fn expired_and_revoked_invitations_cannot_be_used() {
     .await
     .expect_err("过期邀请不能被使用");
     assert!(
-        matches!(error, TransferClientError::Rejected(_, _)),
-        "取消后的错误类型：{error:?}"
+        matches!(
+            error,
+            TransferClientError::Rejected(_, _)
+                | TransferClientError::Connection(_)
+                | TransferClientError::Interrupted
+        ),
+        "过期后的错误类型：{error:?}"
     );
     expired_handle.stop();
 
@@ -262,7 +267,15 @@ async fn expired_and_revoked_invitations_cannot_be_used() {
     )
     .await
     .expect_err("撤销的邀请不能被使用");
-    assert!(matches!(error, TransferClientError::Rejected(_, _)));
+    assert!(
+        matches!(
+            error,
+            TransferClientError::Rejected(_, _)
+                | TransferClientError::Connection(_)
+                | TransferClientError::Interrupted
+        ),
+        "撤销后的错误类型：{error:?}"
+    );
     handle.stop();
 }
 

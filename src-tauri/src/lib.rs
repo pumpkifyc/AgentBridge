@@ -8,6 +8,7 @@ fn greet(name: &str) -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(commands::AppState::default())
         .manage(commands::ReceiveState::default())
         .invoke_handler(tauri::generate_handler![
@@ -26,8 +27,12 @@ pub fn run() {
             commands::cancel_transfer,
             commands::retry_preview,
             commands::delete_staged_snapshot,
+            commands::select_project_directory,
             commands::import_snapshot,
             commands::list_imports,
+            commands::retry_import,
+            commands::open_import,
+            commands::copy_continuation_prompt,
             commands::delete_import,
         ])
         .run(tauri::generate_context!())
@@ -36,6 +41,7 @@ pub fn run() {
 
 pub mod codex;
 pub mod commands;
+pub mod db;
 pub mod imports;
 pub mod pairing;
 pub mod snapshot;

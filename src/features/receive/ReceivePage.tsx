@@ -8,6 +8,7 @@ import type {
   TransferProgress as Progress,
 } from "./receiveTypes";
 import { parsePairingInfo } from "../share/pairingApi";
+import { ImportReview } from "../import/ImportReview";
 
 type State =
   | { kind: "input"; message?: string }
@@ -183,6 +184,7 @@ export function ReceivePage() {
           </div>
         </div>
       )}
+      {state.kind === "staged" && <ImportReview staged={state.snapshot} />}
     </section>
   );
 }

@@ -207,11 +207,11 @@ e2e/                         打包应用的跨平台验收检查
 - `CodexOpener::open_thread(local_thread_id) -> Result<(), OpenError>` 在可用时使用受支持的系统启动或 deep link；否则返回已说明的后备方案，展示可直接粘贴的续接提示。
 - 数据库操作包括列表、重试和删除；删除会移除本地快照和导入记录。除非另行确认，不删除 Codex thread。
 
-- [ ] 使用伪造 App Server 测试在所选代码目录中创建 thread、源 ID 不复用、历史工具不执行、不可信上下文包装、thread 创建失败和打开 Codex 的后备方案。
-- [ ] 添加 SQLite migration，并测试导入历史、重试元数据和删除行为。
-- [ ] 实现项目目录选择/确认；绝不把分享方绝对路径用作本地路径。
-- [ ] 验证新建 thread 在 macOS 和 Windows Codex 桌面版中是否可见且可继续；记录最低测试版本，不支持时启用后备方案。
-- [ ] 运行 `cargo test --manifest-path src-tauri/Cargo.toml imports` 和导入界面测试。
+- [x] 使用伪造 App Server 测试在所选代码目录中创建 thread、源 ID 不复用、历史工具不执行、不可信上下文包装、thread 创建失败和打开 Codex 的后备方案。
+- [x] 添加 SQLite migration，并测试导入历史、重试元数据和删除行为。
+- [x] 实现项目目录选择/确认；绝不把分享方绝对路径用作本地路径。
+- [ ] 验证新建 thread 在 macOS 和 Windows Codex 桌面版中是否可见且可继续；记录最低测试版本，不支持时启用后备方案；本机 CLI 与桌面状态库版本不匹配，发布前需双平台手工验收。
+- [x] 运行 `cargo test --manifest-path src-tauri/Cargo.toml imports` 和导入界面测试。
 
 ## Task 9：导入历史、重试与数据删除
 
@@ -226,9 +226,9 @@ e2e/                         打包应用的跨平台验收检查
 - Tauri 命令：`list_imports()`、`retry_import(import_id)`、`delete_import(import_id)`。
 - 历史页面显示已完成、中断、失败和待处理的导入；默认不展示会话正文。
 
-- [ ] 测试失败导入重试、打开已成功导入、删除记录与暂存快照，以及本地 Codex thread 丢失时的安全处理。
-- [ ] 实现导入历史页面和删除确认。
-- [ ] 运行历史测试及完整 Rust/前端测试。
+- [x] 测试失败导入重试、打开已成功导入、删除记录与暂存快照，以及本地 Codex thread 丢失时的安全处理。
+- [x] 实现导入历史页面和删除确认。
+- [x] 运行历史测试及完整 Rust/前端测试。
 
 ## Task 10：跨平台打包与验收
 

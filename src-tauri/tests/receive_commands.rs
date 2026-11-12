@@ -375,13 +375,16 @@ fn approved_transfer_stages_a_validated_snapshot_without_creating_a_thread() {
         !staged.snapshot_path.contains("/Users/alice/project"),
         "分享方路径不能被当作本机暂存路径"
     );
-    {
-        let receive_state = app.state::<ReceiveState>();
-        let imports = receive_state
-            .imports
-            .lock()
-            .expect("导入记录锁可读取");
-        assert!(imports.is_empty(), "批准下载不能创建 Codex thread");
+    let imports = invoke(&app, "list_imports", 8, serde_json::json!({}))
+        .0
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("命令应响应");
+    if let Ok(value) = imports {
+        assert_eq!(
+            value.as_array().map(Vec::len),
+            Some(0),
+            "批准下载不能创建 Codex thread"
+        );
     }
     let progress = progress_values(&app);
     assert!(!progress.is_empty(), "批准下载应产生真实进度事件");

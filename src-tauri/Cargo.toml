@@ -35,11 +35,12 @@ base64 = "0.22"
 hex = "0.4"
 chrono = "0.4"
 getrandom = "0.3"
+rusqlite = { version = "0.42", features = ["bundled"] }
+tauri-plugin-dialog = "2"
 
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 tauri-utils = "2"
-rusqlite = { version = "0.42", features = ["bundled"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

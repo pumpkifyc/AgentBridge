@@ -1,6 +1,7 @@
 import { useState } from "react";
 import "./App.css";
 import { ReceivePage } from "./features/receive/ReceivePage";
+import { HistoryPage } from "./features/history/HistoryPage";
 import { SharePage } from "./features/share/SharePage";
 
 type View = "home" | "share" | "receive" | "history";
@@ -42,7 +43,7 @@ function App() {
         )}
         {view === "share" && <SharePage />}
         {view === "receive" && <ReceivePage />}
-        {view === "history" && <p className="notice">暂无导入记录。</p>}
+        {view === "history" && <HistoryPage />}
       </div>
     </main>
   );
