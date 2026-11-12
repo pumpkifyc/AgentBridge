@@ -16,12 +16,7 @@ pub fn resolve_codex_executable() -> Result<PathBuf, CodexError> {
         home.map(PathBuf::from),
         platform_candidates(),
     )
-    .ok_or_else(|| {
-        CodexError::NotInstalled(format!(
-            "在 PATH、~/.local/bin、~/.npm-global/bin 和系统常见安装位置均未找到 codex。\
-             可在终端运行 npm install -g @openai/codex，或通过 {EXECUTABLE_ENV} 指定完整路径。"
-        ))
-    })
+    .ok_or_else(|| CodexError::NotInstalled(not_installed_message_for(cfg!(windows))))
 }
 
 fn resolve_with(
@@ -145,16 +140,103 @@ fn platform_candidates() -> Vec<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
-        if let Some(app_data) = env::var_os("APPDATA") {
-            let npm = PathBuf::from(app_data).join("npm");
-            candidates.extend(executable_names().iter().map(|name| npm.join(name)));
-        }
-        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-            let npm = PathBuf::from(local_app_data).join("npm");
-            candidates.extend(executable_names().iter().map(|name| npm.join(name)));
-        }
+        let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
+        let app_data = env::var_os("APPDATA").map(PathBuf::from);
+        let user_profile = env::var_os("USERPROFILE").map(PathBuf::from);
+        let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
+        let program_files_x86 = env::var_os("ProgramFiles(x86)").map(PathBuf::from);
+        let program_data = env::var_os("ProgramData").map(PathBuf::from);
+        candidates.extend(windows_candidates_from_roots(
+            local_app_data.as_deref(),
+            app_data.as_deref(),
+            user_profile.as_deref(),
+            program_files.as_deref(),
+            program_files_x86.as_deref(),
+            program_data.as_deref(),
+        ));
     }
     candidates
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_candidates_from_roots(
+    local_app_data: Option<&Path>,
+    app_data: Option<&Path>,
+    user_profile: Option<&Path>,
+    program_files: Option<&Path>,
+    program_files_x86: Option<&Path>,
+    program_data: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut directories = Vec::new();
+
+    if let Some(local_app_data) = local_app_data {
+        directories.extend([
+            local_app_data
+                .join("Programs")
+                .join("OpenAI")
+                .join("Codex")
+                .join("bin"),
+            local_app_data.join("OpenAI").join("Codex").join("bin"),
+            local_app_data.join("Programs").join("Codex").join("bin"),
+            local_app_data.join("Programs").join("codex").join("bin"),
+            local_app_data.join("npm"),
+            local_app_data.join("Volta").join("bin"),
+            local_app_data
+                .join("Microsoft")
+                .join("WinGet")
+                .join("Links"),
+            local_app_data.join("Microsoft").join("WindowsApps"),
+        ]);
+    }
+    if let Some(app_data) = app_data {
+        directories.push(app_data.join("npm"));
+    }
+    if let Some(user_profile) = user_profile {
+        directories.extend([
+            user_profile.join(".codex").join("bin"),
+            user_profile.join("scoop").join("shims"),
+        ]);
+    }
+    if let Some(program_files) = program_files {
+        directories.extend([
+            program_files.join("OpenAI").join("Codex").join("bin"),
+            program_files.join("Codex"),
+            program_files.join("nodejs"),
+        ]);
+    }
+    if let Some(program_files_x86) = program_files_x86 {
+        directories.push(program_files_x86.join("Codex"));
+    }
+    if let Some(program_data) = program_data {
+        directories.push(program_data.join("chocolatey").join("bin"));
+    }
+
+    directories
+        .into_iter()
+        .flat_map(|directory| {
+            ["codex.exe", "codex.cmd", "codex.bat", "codex"]
+                .into_iter()
+                .map(move |name| directory.join(name))
+        })
+        .collect()
+}
+
+fn not_installed_message_for(windows: bool) -> String {
+    if windows {
+        format!(
+            "在 PATH、%LOCALAPPDATA%\\Programs\\OpenAI\\Codex\\bin、%APPDATA%\\npm、\
+             WinGet、Volta、Scoop 等常见位置均未找到 codex.exe 或 codex.cmd。\
+             可在 PowerShell 运行官方安装命令 \
+             `powershell -ExecutionPolicy ByPass -c \"irm https://chatgpt.com/codex/install.ps1 | iex\"`，\
+             或运行 `npm install -g @openai/codex`；也可以通过 {EXECUTABLE_ENV} \
+             指定 codex.exe 的完整路径。"
+        )
+    } else {
+        format!(
+            "在 PATH、~/.local/bin、~/.npm-global/bin 和系统常见安装位置均未找到 codex。\
+             可在终端运行 npm install -g @openai/codex，或通过 {EXECUTABLE_ENV} 指定完整路径。"
+        )
+    }
 }
 
 #[cfg(test)]
@@ -194,8 +276,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o755))
-                .expect("设置可执行权限");
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("设置可执行权限");
         }
     }
 
@@ -258,6 +339,31 @@ mod tests {
         );
 
         assert_eq!(resolved, Some(fallback));
+    }
+
+    #[test]
+    fn windows_candidates_include_the_official_standalone_installer_location() {
+        let temp = TestDir::new("windows-official");
+        let local_app_data = temp.0.join("Local");
+        let candidates =
+            windows_candidates_from_roots(Some(&local_app_data), None, None, None, None, None);
+        let expected = local_app_data
+            .join("Programs")
+            .join("OpenAI")
+            .join("Codex")
+            .join("bin")
+            .join("codex.exe");
+
+        assert!(candidates.contains(&expected));
+    }
+
+    #[test]
+    fn windows_not_installed_message_names_the_official_installer_location() {
+        let message = not_installed_message_for(true);
+
+        assert!(message.contains(r"%LOCALAPPDATA%\Programs\OpenAI\Codex\bin"));
+        assert!(message.contains("codex.exe"));
+        assert!(message.contains("install.ps1"));
     }
 
     fn executable_name() -> &'static str {
