@@ -11,13 +11,21 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     fs,
+    net::{IpAddr, Ipv4Addr},
     sync::{Arc, Mutex},
 };
 use tauri::{Manager, Runtime as TauriRuntime, State, WebviewWindow, ipc::Channel};
 use tauri_plugin_dialog::DialogExt;
 use tokio::{runtime::{Builder, Runtime}, task::AbortHandle};
 
-const MIN_COMPATIBLE_CLI: (u32, u32, u32) = (0, 142, 2);
+const MIN_COMPATIBLE_CLI: (u32, u32, u32) = (0, 167, 2);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalAddress {
+    pub ip: String,
+    pub name: String,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,7 +70,8 @@ impl From<CodexError> for CommandError {
 pub struct AppState {
     pub invitations: Arc<InvitationManager>,
     pub servers: Mutex<HashMap<String, crate::transfer::TransferServerHandle>>,
-    snapshots: Mutex<HashMap<String, SnapshotV1>>,
+    pub codex: Arc<Mutex<Option<CodexClient>>>,
+    previews: PreviewRegistry,
 }
 
 impl AppState {
@@ -77,9 +86,262 @@ impl Default for AppState {
         Self {
             invitations: Arc::new(InvitationManager::new()),
             servers: Mutex::new(HashMap::new()),
-            snapshots: Mutex::new(HashMap::new()),
+            codex: Arc::new(Mutex::new(None)),
+            previews: PreviewRegistry::default(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct PreparedPreview {
+    thread_id: String,
+    snapshot: SnapshotV1,
+}
+
+#[derive(Default)]
+struct PreviewRegistry {
+    entries: Mutex<HashMap<String, PreparedPreview>>,
+}
+
+impl PreviewRegistry {
+    fn insert(
+        &self,
+        request: &PreviewSnapshotRequest,
+        snapshot: SnapshotV1,
+    ) -> Result<(), CommandError> {
+        request.validate()?;
+        let mut entries = self.entries.lock().expect("预览锁已中毒");
+        if entries.contains_key(&request.preview_id) {
+            return Err(CommandError::new(
+                "invalidPreview",
+                "预览标识重复，请重新生成分享预览",
+            ));
+        }
+        entries.insert(
+            request.preview_id.clone(),
+            PreparedPreview {
+                thread_id: request.thread_id.clone(),
+                snapshot,
+            },
+        );
+        Ok(())
+    }
+
+    fn snapshot_for_share(
+        &self,
+        thread_id: &str,
+        preview_id: &str,
+    ) -> Result<SnapshotV1, CommandError> {
+        validate_preview_id(preview_id)?;
+        let preview = self
+            .entries
+            .lock()
+            .expect("预览锁已中毒")
+            .get(preview_id)
+            .cloned()
+            .ok_or_else(|| {
+                CommandError::new("invalidPreview", "分享预览已失效，请重新生成")
+            })?;
+        if preview.thread_id != thread_id {
+            return Err(CommandError::new(
+                "invalidPreview",
+                "分享预览与会话不匹配，请重新生成",
+            ));
+        }
+        Ok(preview.snapshot)
+    }
+
+    fn cancel(&self, preview_id: &str) {
+        if !preview_id.is_empty() {
+            self.entries
+                .lock()
+                .expect("预览锁已中毒")
+                .remove(preview_id);
+        }
+    }
+}
+
+const MAX_PREVIEW_ID_LENGTH: usize = 128;
+
+fn validate_preview_id(preview_id: &str) -> Result<(), CommandError> {
+    if preview_id.trim().is_empty() || preview_id.len() > MAX_PREVIEW_ID_LENGTH {
+        return Err(CommandError::new(
+            "invalidPreview",
+            "预览标识无效，请重新生成分享预览",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewSnapshotRequest {
+    pub thread_id: String,
+    pub cutoff_turn_id: Option<String>,
+    pub preview_id: String,
+}
+
+impl PreviewSnapshotRequest {
+    fn validate(&self) -> Result<(), CommandError> {
+        if self.thread_id.trim().is_empty() {
+            return Err(CommandError::new("threadNotFound", "请选择要分享的会话"));
+        }
+        if self
+            .cutoff_turn_id
+            .as_deref()
+            .is_some_and(|turn_id| turn_id.trim().is_empty())
+        {
+            return Err(CommandError::new(
+                "invalidSnapshot",
+                "截止轮次无效，请重新选择",
+            ));
+        }
+        validate_preview_id(&self.preview_id)
+    }
+}
+
+#[cfg(test)]
+mod preview_registry_tests {
+    use super::*;
+    use crate::snapshot::schema::SnapshotMetadata;
+
+    fn request(thread_id: &str, preview_id: &str) -> PreviewSnapshotRequest {
+        PreviewSnapshotRequest {
+            thread_id: thread_id.into(),
+            cutoff_turn_id: None,
+            preview_id: preview_id.into(),
+        }
+    }
+
+    fn snapshot(thread_id: &str) -> SnapshotV1 {
+        SnapshotV1 {
+            schema_version: 1,
+            metadata: SnapshotMetadata {
+                source_thread_id: thread_id.into(),
+                title: "测试会话".into(),
+                created_at: 1,
+                updated_at: 2,
+                cutoff_turn_id: None,
+                project_name: None,
+                repository_id: None,
+                source_working_directory: None,
+            },
+            messages: Vec::new(),
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn preview_token_is_bound_to_its_source_thread() {
+        let registry = PreviewRegistry::default();
+        let preview_request = request("thread-1", "preview-1");
+        registry
+            .insert(&preview_request, snapshot("thread-1"))
+            .expect("预览应保存成功");
+
+        let error = registry
+            .snapshot_for_share("thread-2", "preview-1")
+            .expect_err("预览令牌不能跨会话复用");
+        assert_eq!(error.code, "invalidPreview");
+        assert_eq!(
+            registry
+                .snapshot_for_share("thread-1", "preview-1")
+                .expect("原会话应可继续使用预览")
+                .metadata
+                .source_thread_id,
+            "thread-1"
+        );
+    }
+
+    #[test]
+    fn cancelling_a_preview_prevents_later_sharing() {
+        let registry = PreviewRegistry::default();
+        registry
+            .insert(&request("thread-1", "preview-1"), snapshot("thread-1"))
+            .expect("预览应保存成功");
+
+        registry.cancel("preview-1");
+
+        let error = registry
+            .snapshot_for_share("thread-1", "preview-1")
+            .expect_err("取消后的预览令牌必须失效");
+        assert_eq!(error.code, "invalidPreview");
+    }
+
+    #[test]
+    fn duplicate_preview_token_is_rejected_without_overwriting_the_original() {
+        let registry = PreviewRegistry::default();
+        registry
+            .insert(&request("thread-1", "preview-1"), snapshot("thread-1"))
+            .expect("首个预览应保存成功");
+
+        let error = registry
+            .insert(&request("thread-2", "preview-1"), snapshot("thread-2"))
+            .expect_err("重复预览标识必须被拒绝");
+        assert_eq!(error.code, "invalidPreview");
+        assert_eq!(
+            registry
+                .snapshot_for_share("thread-1", "preview-1")
+                .expect("原预览不能被覆盖")
+                .metadata
+                .source_thread_id,
+            "thread-1"
+        );
+    }
+
+    #[test]
+    fn rejects_the_old_cli_that_lacks_current_thread_items_api() {
+        assert!(!compatible("codex-cli 0.142.2"));
+        assert!(compatible("codex-cli 0.167.2"));
+    }
+}
+
+fn with_codex<T>(
+    state: &AppState,
+    action: impl FnOnce(&mut CodexClient) -> Result<T, CommandError>,
+) -> Result<T, CommandError> {
+    let mut guard = state
+        .codex
+        .lock()
+        .map_err(|_| CommandError::new("codexUnavailable", "Codex 连接状态不可用"))?;
+    if guard.is_none() {
+        *guard = Some(CodexClient::connect().map_err(CommandError::from)?);
+    }
+    let client = guard.as_mut().expect("Codex 连接已初始化");
+    let result = action(client);
+    if result.is_err() {
+        *guard = None;
+    }
+    result
+}
+
+fn local_ipv4_addresses() -> Vec<LocalAddress> {
+    let mut addresses: Vec<LocalAddress> = if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|interface| match interface.ip() {
+            IpAddr::V4(ip) if !ip.is_loopback() && !ip.is_link_local() => Some(LocalAddress {
+                ip: ip.to_string(),
+                name: interface.name,
+            }),
+            _ => None,
+        })
+        .collect();
+    addresses.sort_by(|left, right| left.ip.cmp(&right.ip).then(left.name.cmp(&right.name)));
+    addresses.dedup_by(|left, right| left.ip == right.ip);
+    addresses
+}
+
+#[tauri::command]
+pub fn list_local_addresses() -> Vec<LocalAddress> {
+    let mut addresses = local_ipv4_addresses();
+    if addresses.is_empty() {
+        addresses.push(LocalAddress {
+            ip: Ipv4Addr::LOCALHOST.to_string(),
+            name: "localhost".into(),
+        });
+    }
+    addresses
 }
 
 fn compatible(version: &str) -> bool {
@@ -113,7 +375,7 @@ fn codex_version() -> Result<String, CommandError> {
 }
 
 #[tauri::command]
-pub fn codex_status() -> Result<CodexStatus, CommandError> {
+pub fn codex_status(state: State<'_, AppState>) -> Result<CodexStatus, CommandError> {
     let version = codex_version()?;
     if !compatible(&version) {
         return Ok(CodexStatus {
@@ -122,8 +384,9 @@ pub fn codex_status() -> Result<CodexStatus, CommandError> {
             version: Some(version),
         });
     }
-    let mut client = CodexClient::connect().map_err(CommandError::from)?;
-    let page = client.list_threads(None).map_err(CommandError::from)?;
+    let page = with_codex(&state, |client| {
+        client.list_threads(None).map_err(CommandError::from)
+    })?;
     if page.data.is_empty() {
         return Ok(CodexStatus {
             state: "unsupported".into(),
@@ -139,37 +402,65 @@ pub fn codex_status() -> Result<CodexStatus, CommandError> {
 }
 
 #[tauri::command]
-pub fn list_threads(cursor: Option<String>) -> Result<Page<crate::codex::models::ThreadSummary>, CommandError> {
-    let mut client = CodexClient::connect().map_err(CommandError::from)?;
-    client.list_threads(cursor).map_err(CommandError::from)
+pub fn list_threads(
+    state: State<'_, AppState>,
+    cursor: Option<String>,
+) -> Result<Page<crate::codex::models::ThreadSummary>, CommandError> {
+    with_codex(&state, |client| {
+        client.list_threads(cursor).map_err(CommandError::from)
+    })
 }
 
 #[tauri::command]
-pub fn list_turns(thread_id: String) -> Result<Vec<crate::codex::models::TurnSummary>, CommandError> {
-    let mut client = CodexClient::connect().map_err(CommandError::from)?;
-    client.list_turns(&thread_id).map_err(CommandError::from)
-}
-
-#[tauri::command]
-pub fn preview_snapshot(
+pub fn list_turns(
     state: State<'_, AppState>,
     thread_id: String,
-    cutoff_turn_id: Option<String>,
+) -> Result<Vec<crate::codex::models::TurnSummary>, CommandError> {
+    with_codex(&state, |client| {
+        client.list_turns(&thread_id).map_err(CommandError::from)
+    })
+}
+
+#[tauri::command]
+pub async fn preview_snapshot(
+    state: State<'_, AppState>,
+    request: PreviewSnapshotRequest,
 ) -> Result<SnapshotV1, CommandError> {
-    let mut client = CodexClient::connect().map_err(CommandError::from)?;
-    let snapshot = client
-        .read_snapshot(&thread_id, cutoff_turn_id.as_deref())
-        .map_err(CommandError::from)?;
+    request.validate()?;
+    let client = Arc::clone(&state.codex);
+    let read_thread_id = request.thread_id.clone();
+    let cutoff_turn_id = request.cutoff_turn_id.clone();
+    let snapshot = tokio::task::spawn_blocking(move || {
+        let mut guard = client
+            .lock()
+            .map_err(|_| CommandError::new("codexUnavailable", "Codex 连接状态不可用"))?;
+        if guard.is_none() {
+            *guard = Some(CodexClient::connect().map_err(CommandError::from)?);
+        }
+        let result = guard
+            .as_mut()
+            .expect("Codex 连接已初始化")
+            .read_snapshot(&read_thread_id, cutoff_turn_id.as_deref())
+            .map_err(CommandError::from);
+        if result.is_err() {
+            *guard = None;
+        }
+        result
+    })
+    .await
+    .map_err(|error| CommandError::new("codexUnavailable", error.to_string()))??;
     let bytes = serde_json::to_vec(&snapshot)
         .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
     let validated = validate_snapshot(&bytes)
         .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
-    state
-        .snapshots
-        .lock()
-        .expect("快照锁已中毒")
-        .insert(thread_id, validated.clone());
+    state.previews.insert(&request, validated.clone())?;
     Ok(validated)
+}
+
+#[tauri::command]
+pub fn cancel_preview(state: State<'_, AppState>, preview_id: String) -> Result<(), CommandError> {
+    state.previews.cancel(&preview_id);
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -188,6 +479,7 @@ pub struct ShareSession {
 #[serde(rename_all = "camelCase")]
 pub struct StartShareRequest {
     pub thread_id: String,
+    pub preview_id: String,
     pub bind_ip: String,
 }
 
@@ -196,13 +488,12 @@ pub async fn start_share(
     state: State<'_, AppState>,
     request: StartShareRequest,
 ) -> Result<ShareSession, CommandError> {
+    if request.thread_id.trim().is_empty() {
+        return Err(CommandError::new("threadNotFound", "请选择要分享的会话"));
+    }
     let snapshot = state
-        .snapshots
-        .lock()
-        .expect("快照锁已中毒")
-        .get(&request.thread_id)
-        .cloned()
-        .ok_or_else(|| CommandError::new("invalidSnapshot", "请先预览要分享的会话"))?;
+        .previews
+        .snapshot_for_share(&request.thread_id, &request.preview_id)?;
     let ip = request
         .bind_ip
         .parse()

@@ -166,6 +166,25 @@ fn unsupported_app_server_method_is_reported_without_marked_import() {
 }
 
 #[test]
+fn reads_current_thread_items_api_and_millisecond_timestamps() {
+    let (dir, mut client) = connect("current-items", "current-protocol");
+    let snapshot = client
+        .read_snapshot("source-thread", None)
+        .expect("当前公开接口应返回完整快照");
+    assert!(snapshot
+        .messages
+        .iter()
+        .any(|message| message.text == "Whole thread page"));
+    assert!(snapshot
+        .messages
+        .iter()
+        .any(|message| message.text == "Add a test"));
+    assert_eq!(snapshot.messages[0].timestamp, Some(120));
+    drop(client);
+    remove_dir(&dir);
+}
+
+#[test]
 fn creates_thread_in_local_project_and_waits_for_turn_completion() {
     let (dir, mut client) = connect("import", "strict-import");
     let thread_id = client

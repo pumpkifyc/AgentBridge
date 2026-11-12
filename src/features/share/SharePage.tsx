@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConversationPreview } from "./ConversationPreview";
 import { PairingPanel } from "./PairingPanel";
 import { ThreadPicker } from "./ThreadPicker";
+import { describeError } from "./shareErrors";
 import { shareApi } from "./shareApi";
 import type {
   CodexStatus,
@@ -10,6 +11,13 @@ import type {
   ThreadSummary,
   TurnSummary,
 } from "./shareTypes";
+
+interface PreparedPreview {
+  id: string;
+  threadId: string;
+  cutoffTurnId: string | null;
+  snapshot: SnapshotV1;
+}
 
 function toPageState(status: CodexStatus, threads: ThreadSummary[]): SharePageState {
   if (status.state === "unsupported") {
@@ -27,19 +35,17 @@ function toPageState(status: CodexStatus, threads: ThreadSummary[]): SharePageSt
   return { kind: "available", status, threads, turns: [] };
 }
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function SharePage() {
   const [pageState, setPageState] = useState<SharePageState>({ kind: "loading" });
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   const [turns, setTurns] = useState<TurnSummary[]>([]);
-  const [snapshot, setSnapshot] = useState<SnapshotV1 | null>(null);
+  const [preview, setPreview] = useState<PreparedPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [checkCount, setCheckCount] = useState(0);
+  const activePreviewId = useRef<string | null>(null);
+  const previewSequence = useRef(0);
 
   const checkCodex = useCallback(() => {
     let active = true;
@@ -99,43 +105,67 @@ export function SharePage() {
     };
   }, [selectedThreadId]);
 
-  useEffect(() => {
-    let active = true;
-    async function loadPreview() {
-      if (!selectedThreadId) {
-        setSnapshot(null);
-        return;
-      }
-      setPreviewLoading(true);
-      setPreviewError(null);
-      try {
-        const result = await shareApi.previewSnapshot(selectedThreadId, selectedTurnId);
-        if (active) {
-          setSnapshot(result);
-        }
-      } catch (error) {
-        if (active) {
-          setSnapshot(null);
-          setPreviewError(describeError(error));
-        }
-      } finally {
-        if (active) {
-          setPreviewLoading(false);
-        }
-      }
+  const invalidatePreview = useCallback((cancelBackend: boolean) => {
+    const previewId = activePreviewId.current;
+    activePreviewId.current = null;
+    if (cancelBackend && previewId) {
+      void shareApi.cancelPreview(previewId).catch(() => undefined);
     }
-    void loadPreview();
-    return () => {
-      active = false;
-    };
-  }, [selectedThreadId, selectedTurnId]);
+    setPreview(null);
+    setPreviewLoading(false);
+    setPreviewError(null);
+  }, []);
+
+  useEffect(() => () => {
+    const previewId = activePreviewId.current;
+    if (previewId) {
+      void shareApi.cancelPreview(previewId).catch(() => undefined);
+    }
+  }, []);
 
   const handleSelectThread = useCallback((threadId: string) => {
+    invalidatePreview(true);
     setSelectedThreadId(threadId);
     setSelectedTurnId(null);
     setTurns([]);
-    setSnapshot(null);
-  }, []);
+  }, [invalidatePreview]);
+
+  const handleSelectTurn = useCallback((turnId: string | null) => {
+    invalidatePreview(true);
+    setSelectedTurnId(turnId);
+  }, [invalidatePreview]);
+
+  const previewReady = preview !== null
+    && preview.threadId === selectedThreadId
+    && preview.cutoffTurnId === selectedTurnId;
+
+  async function generatePreview() {
+    if (!selectedThreadId || previewLoading) {
+      return;
+    }
+    invalidatePreview(true);
+    const threadId = selectedThreadId;
+    const cutoffTurnId = selectedTurnId;
+    const previewId = `preview-${previewSequence.current += 1}`;
+    activePreviewId.current = previewId;
+    setPreviewLoading(true);
+    try {
+      const result = await shareApi.previewSnapshot(threadId, cutoffTurnId, previewId);
+      if (activePreviewId.current !== previewId) {
+        void shareApi.cancelPreview(previewId).catch(() => undefined);
+        return;
+      }
+      setPreview({ id: previewId, threadId, cutoffTurnId, snapshot: result });
+    } catch (error) {
+      if (activePreviewId.current === previewId) {
+        setPreviewError(describeError(error));
+      }
+    } finally {
+      if (activePreviewId.current === previewId) {
+        setPreviewLoading(false);
+      }
+    }
+  }
 
   if (pageState.kind === "loading") {
     return <p className="notice" role="status">正在检查本机 Codex…</p>;
@@ -208,13 +238,35 @@ export function SharePage() {
         selectedThreadId={selectedThreadId}
         selectedTurnId={selectedTurnId}
         onSelectThread={handleSelectThread}
-        onSelectTurn={setSelectedTurnId}
+        onSelectTurn={handleSelectTurn}
       />
       <div className="share-detail-column">
-        <ConversationPreview snapshot={snapshot} loading={previewLoading} error={previewError} />
+        <section className="panel preview-action-panel" aria-labelledby="preview-action-title">
+          <div className="panel-heading">
+            <h2 id="preview-action-title">分享预览</h2>
+            <span>{previewReady ? "已生成" : "尚未生成"}</span>
+          </div>
+          <p className="hint">
+            选择会话和截止轮次后生成预览；只有预览成功后才能创建局域网邀请。
+          </p>
+          <button
+            type="button"
+            className="primary-action"
+            disabled={previewLoading || !selectedThreadId}
+            onClick={() => void generatePreview()}
+          >
+            {previewLoading ? "正在生成预览…" : previewReady ? "重新生成预览" : "生成分享预览"}
+          </button>
+        </section>
+        <ConversationPreview
+          snapshot={previewReady ? preview.snapshot : null}
+          loading={false}
+          error={previewError}
+        />
         <PairingPanel
           threadId={selectedThreadId}
-          previewReady={snapshot !== null && !previewLoading && !previewError}
+          previewId={previewReady ? preview.id : null}
+          previewReady={previewReady}
         />
       </div>
     </div>

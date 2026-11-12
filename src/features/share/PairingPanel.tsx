@@ -3,9 +3,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ShareStatus } from "./ShareStatus";
 import { buildPairingInfo, pairingApi } from "./pairingApi";
 import type { ShareSession, ShareState } from "./pairingApi";
+import { shareApi } from "./shareApi";
+import type { LocalAddress } from "./shareApi";
 
 interface Props {
   threadId: string | null;
+  previewId: string | null;
   previewReady: boolean;
 }
 
@@ -18,12 +21,14 @@ const ACTIVE_STATES: ShareState[] = [
   "失败",
 ];
 
-export function PairingPanel({ threadId, previewReady }: Props) {
+export function PairingPanel({ threadId, previewId, previewReady }: Props) {
   const [session, setSession] = useState<ShareSession | null>(null);
   const [state, setState] = useState<ShareState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [bindIp, setBindIp] = useState("127.0.0.1");
+  const [localAddresses, setLocalAddresses] = useState<LocalAddress[]>([]);
+  const [addressError, setAddressError] = useState<string | null>(null);
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -37,7 +42,30 @@ export function PairingPanel({ threadId, previewReady }: Props) {
 
   useEffect(() => {
     reset();
-  }, [threadId, previewReady, reset]);
+  }, [threadId, previewId, reset]);
+
+  useEffect(() => {
+    let active = true;
+    shareApi.listLocalAddresses()
+      .then((addresses) => {
+        if (!active) {
+          return;
+        }
+        setLocalAddresses(addresses);
+        const preferred = addresses.find((address) => !address.ip.startsWith("127."));
+        if (preferred) {
+          setBindIp((current) => current === "127.0.0.1" ? preferred.ip : current);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setAddressError("无法自动检测局域网地址，请手动填写。");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const pairingInfo = useMemo(
     () => (session ? buildPairingInfo(session) : ""),
@@ -100,7 +128,7 @@ export function PairingPanel({ threadId, previewReady }: Props) {
   }, [session]);
 
   async function start() {
-    if (!threadId || !previewReady) {
+    if (!threadId || !previewId || !previewReady) {
       setError("请先选择并预览一个会话。");
       return;
     }
@@ -108,7 +136,7 @@ export function PairingPanel({ threadId, previewReady }: Props) {
     setError(null);
     setCopied(false);
     try {
-      const created = await pairingApi.startShare(threadId, bindIp);
+      const created = await pairingApi.startShare(threadId, previewId, bindIp);
       setSession(created);
       setState(created.state);
     } catch {
@@ -171,12 +199,21 @@ export function PairingPanel({ threadId, previewReady }: Props) {
         placeholder="例如 192.168.1.20"
         disabled={busy || activeSession}
       />
-      <p className="hint">只绑定你选择的地址；接收方需在同一局域网内。</p>
+      <p className="hint">
+        {localAddresses.some((address) => !address.ip.startsWith("127."))
+          ? `已检测到 ${localAddresses.length} 个本机地址，当前优先使用局域网地址。`
+          : "未检测到局域网地址；127.0.0.1 仅用于本机测试，同事无法连接。"}
+      </p>
+      {addressError && <p className="hint warning-text">{addressError}</p>}
+      {!previewReady && (
+        <p className="hint" id="preview-gate-hint">生成分享预览后才能创建邀请。</p>
+      )}
       <div className="action-row">
         <button
           type="button"
           className="primary-action"
-          disabled={busy || activeSession}
+          disabled={busy || activeSession || !previewReady || !previewId}
+          aria-describedby={!previewReady ? "preview-gate-hint" : undefined}
           onClick={() => void start()}
         >
           {state && state !== "等待配对" ? "重新创建邀请" : "创建一次性邀请"}

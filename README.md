@@ -19,7 +19,7 @@ Windows 安装包需在 Windows 主机或 CI runner 上构建。
 
 ## 第一版使用流程
 
-1. 分享方在「分享会话」选择本机 Codex 会话和截止轮次，预览文本与警告后创建一次性邀请。
+1. 分享方在「分享会话」搜索并选择本机 Codex 会话和截止轮次，明确生成预览并核对文本与警告后创建一次性邀请。应用会优先自动选择局域网 IPv4 地址，`127.0.0.1` 仅用于本机测试。
 2. 通过可信渠道把配对 JSON 交给同事；接收方核对验证码与证书指纹，在「接收会话」先预览元数据，再明确接受下载。
 3. 快照校验后先暂存在接收方本机。接收方在导入确认页选择自己的项目目录，再创建独立的本机 Codex 续接会话。
 4. 「导入历史」可查看状态、重试失败导入、复制续接提示和删除本机记录及暂存快照。
@@ -33,6 +33,6 @@ Windows 安装包需在 Windows 主机或 CI runner 上构建。
 - 打包与双平台真机矩阵：[跨平台打包与验收记录](docs/testing/cross-platform-acceptance.md)。
 - 人工步骤：[分享与导入验收清单](e2e/share-import-checklist.md)。
 
-macOS 未签名的 `.app` 和 `.dmg` 已在本机成功构建；Windows NSIS 安装包、GitHub Actions 双平台运行、双向真机分享和 Codex 桌面版历史可见性仍需按上述文档执行发布前验收。本机 CLI 与桌面状态库版本不匹配时，不能把空会话列表当作功能故障或验收通过。
+macOS 未签名的 `.app` 和 `.dmg` 已在本机成功构建；Windows NSIS 安装包、GitHub Actions 双平台运行、双向真机分享和 Codex 桌面版历史可见性仍需按上述文档执行发布前验收。当前 macOS 已使用 Codex CLI 0.167.2 验证公开历史接口，单机结果不能替代双平台真机验收。
 
 `.github/workflows/build.yml` 在 macOS 和 Windows runner 上运行配置检查、前端测试、Rust 测试、clippy 和未签名发布构建；正式签名与公证不在第一版开发构建范围内。

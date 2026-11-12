@@ -1,25 +1,30 @@
 # Codex App Server 公开接口与本机兼容性记录
 
 日期：2026-11-12  
-测试环境：macOS 15.6.0、Codex CLI 0.142.2、Codex 桌面版会话由更高版本写入。
+测试环境：macOS 15.6.0、Codex CLI 0.167.2。
 
 ## 结论
 
-Codex 提供了公开的 App Server JSON-RPC 接口。官方文档说明了 `initialize` / `initialized` 握手、`thread/list`、`thread/read`、`thread/start` 和 `turn/start`，并明确要求使用 `thread/turns/list` 与历史条目分页接口读取会话历史。AgentBridge 只调用这些公开接口，不读取桌面版未公开数据库或内部文件。
+Codex 提供了公开的 App Server JSON-RPC 接口。官方文档说明了 `initialize` / `initialized` 握手、`thread/list`、`thread/read`、`thread/start` 和 `turn/start`。当前协议使用 `thread/turns/list` 分页读取轮次，并使用 `thread/items/list` 按整个 thread 分页读取历史条目。AgentBridge 只调用这些公开接口，不读取桌面版未公开数据库或内部文件。
 
-参考：[OpenAI 官方 App Server 文档](https://developers.openai.com/codex/app-server)。本机可使用 `codex app-server generate-json-schema --out <目录>` 导出与当前 CLI 版本一致的协议 schema；历史分页接口需要 `--experimental` 才会出现在导出的 schema 中。
+参考：[OpenAI 官方 App Server 文档](https://developers.openai.com/codex/app-server)。本机可使用 `codex app-server generate-json-schema --experimental --out <目录>` 导出与当前 CLI 版本一致的协议 schema。
 
 ## 本机实测
 
 - `codex app-server --stdio` 可启动并完成握手；握手后还会发送 `remoteControl/status/changed` 等通知，客户端必须按 JSON-RPC 请求 ID 关联响应。
-- `thread/list` 返回空列表，即使本机桌面版状态库已有 282 条会话记录；这与 CLI 0.142.2 和桌面状态库由更高版本写入的版本差异有关。
-- 对已知 thread ID 调用 `thread/read` 可以读取元数据。`includeTurns: true` 返回的 turns 的 `items` 均为空；`thread/turns/list` 可分页返回 turn 元数据。
-- 本机 0.142.2 的 `thread/turns/items/list` 返回 `-32601 is not supported yet`。因此 AgentBridge 在读取历史条目时明确报出兼容性错误，不把空历史误当成完整快照。
-- `thread/fork` 创建的新 thread 会写入本机 state DB，但 `thread/read` 仍未返回历史 items。该行为不能作为完整的会话导入方案。
+- `thread/list` 可返回本机 Codex 会话；AgentBridge 使用 `updated_at` 倒序分页，并把每一页合并为前端会话列表。
+- `thread/read` 只用于读取 thread 元数据，`thread/turns/list` 用于读取轮次。历史条目改用当前公开的 `thread/items/list`，按整个 thread 分页读取后再按 `turnId` 分组。
+- `thread/items/list` 当前返回条目级时间字段 `startedAtMs` 和 `completedAtMs`，单位为毫秒。AgentBridge 将其转换为界面使用的秒级时间戳，同时兼容旧的秒级字段。
+- 旧接口 `thread/turns/items/list` 已不在当前导出 schema 中；对当前 App Server 调用会返回 `-32600 unknown variant`。代码不再依赖该接口。
+- MCP 工具结果等 `result` 字段可能是对象而非固定字符串。快照转换会先安全序列化对象，再生成只读历史摘要，避免把结构化结果误判为空。
 
 ## 第一版行为
 
-应用启动时检查公开接口是否可用。若 `thread/list` 为空或历史分页接口不受支持，界面显示“当前 Codex 版本不兼容”及建议升级到匹配的 Codex 桌面版/CLI。不会静默读取内部 SQLite，也不会改动桌面版数据库。
+应用启动时检查公开接口是否可用，并把 macOS 上已验证的 Codex CLI 0.167.2 设为当前最低兼容版本。低于该版本时，界面显示“当前 Codex 版本不兼容”及升级说明；若 `thread/list` 为空或历史分页接口不受支持，也不会继续预览。应用不会静默读取内部 SQLite，也不会改动桌面版数据库。
+
+会话列表只加载轻量元数据，并提供按标题、预览、工作目录和仓库标识即时搜索。选中会话只加载截止轮次；用户明确点击“生成分享预览”后才读取完整历史。每次预览由前端生成独立 `previewId`，Rust 将快照与会话 ID 绑定保存；切换会话、截止轮次、重新生成预览或离开页面时会取消旧令牌，迟到的异步结果也会被丢弃并清理。创建邀请必须同时提交匹配的 `threadId` 与 `previewId`，不能复用其他会话的旧预览。
+
+分享方界面自动检测非回环、非链路本地 IPv4 地址并优先选择局域网地址。只有检测不到局域网地址时才回退到 `127.0.0.1`，并明确提示该地址只适合本机测试。Rust 命令错误以结构化 `{ code, message }` 返回，前端提取中文 `message` 显示，不再出现 `[object Object]`。
 
 接收方仍可保留通过有效分享收到的快照；创建本地续接会话使用 `thread/start` 和 `turn/start`，把快照作为一条明确标注的不可信历史用户消息传入。如果本机 Codex 不支持这些接口，应用保留快照与可直接粘贴的续接提示，由用户在 Codex 中手动新建会话。
 
@@ -49,4 +54,4 @@ Codex 提供了公开的 App Server JSON-RPC 接口。官方文档说明了 `ini
 
 ### 双平台待验收事项
 
-本机开发环境的 Codex CLI 0.142.2 与桌面状态库版本不匹配，`thread/list` 为空，因此尚不能验证第三方 App Server 创建的 thread 是否立即出现在桌面版历史列表中。发布前需在 macOS 和 Windows 上分别安装版本匹配的 Codex CLI 与桌面版，执行「创建 thread → 检查公开会话列表 → 打开桌面版历史 → 继续新轮次」，记录最低测试版本。若桌面版不显示该会话，保留上述复制续接提示后备方案；不得写入桌面版未公开数据库。
+当前 macOS 环境已确认 Codex CLI 0.167.2 的会话列表和当前历史分页接口可用。发布前仍需在 macOS 和 Windows 上分别使用版本匹配的 Codex CLI 与桌面版，执行「创建 thread → 检查公开会话列表 → 打开桌面版历史 → 继续新轮次」，记录双平台最低测试版本。若桌面版不显示该会话，保留上述复制续接提示后备方案；不得写入桌面版未公开数据库。

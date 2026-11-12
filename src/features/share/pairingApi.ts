@@ -24,9 +24,9 @@ export interface ShareSession {
 }
 
 export const pairingApi = {
-  async startShare(threadId: string, bindIp: string): Promise<ShareSession> {
+  async startShare(threadId: string, previewId: string, bindIp: string): Promise<ShareSession> {
     return invoke<ShareSession>("start_share", {
-      request: { threadId, bindIp },
+      request: { threadId, previewId, bindIp },
     });
   },
 

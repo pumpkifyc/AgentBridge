@@ -36,6 +36,7 @@ function mockPolling(...states: ShareState[]) {
 
 beforeEach(() => {
   resetTauriMocks();
+  mockTauri("list_local_addresses", {}, [{ ip: "127.0.0.1", name: "localhost" }]);
   vi.useFakeTimers({ shouldAdvanceTime: true });
   vi.setSystemTime(nowSeconds * 1000);
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -49,19 +50,60 @@ afterEach(() => {
 });
 
 describe("分享方配对面板", () => {
-  it("未选择会话时提示先预览，且不创建邀请", () => {
-    render(<PairingPanel threadId={null} previewReady={false} />);
+  it("预览未完成时禁用创建邀请", () => {
+    render(<PairingPanel threadId={null} previewId={null} previewReady={false} />);
 
+    expect(screen.getByRole("button", { name: "创建一次性邀请" })).toBeDisabled();
+    expect(screen.getByText("生成分享预览后才能创建邀请。")).toBeInTheDocument();
+    expect(screen.getByText("尚未开始分享")).toBeInTheDocument();
+  });
+
+  it("自动选择检测到的局域网地址并随邀请一起提交", async () => {
+    const internals = (
+      globalThis as typeof globalThis & {
+        __TAURI_INTERNALS__: {
+          invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    const originalInvoke = internals.invoke;
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    internals.invoke = async (command, args) => {
+      calls.push({ command, args });
+      return originalInvoke(command, args);
+    };
+    mockTauri("list_local_addresses", {}, [
+      { ip: "192.168.1.20", name: "en0" },
+      { ip: "127.0.0.1", name: "localhost" },
+    ]);
+    mockStart();
+    mockPolling("等待配对");
+    render(<PairingPanel threadId="thread-1" previewId="preview-1" previewReady />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("本机局域网地址")).toHaveValue("192.168.1.20");
+    });
     fireEvent.click(screen.getByRole("button", { name: "创建一次性邀请" }));
 
-    expect(screen.getByRole("alert")).toHaveTextContent("请先选择并预览一个会话");
-    expect(screen.getByText("尚未开始分享")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(calls).toContainEqual({
+        command: "start_share",
+        args: {
+          request: {
+            threadId: "thread-1",
+            previewId: "preview-1",
+            bindIp: "192.168.1.20",
+          },
+        },
+      });
+    });
+    internals.invoke = originalInvoke;
   });
 
   it("创建邀请后显示地址、验证码、指纹和含凭据的二维码", async () => {
     mockStart();
     mockPolling("等待配对");
-    render(<PairingPanel threadId="thread-1" previewReady />);
+    render(<PairingPanel threadId="thread-1" previewId="preview-1" previewReady />);
 
     fireEvent.change(screen.getByLabelText("本机局域网地址"), {
       target: { value: "192.168.1.20" },
@@ -101,7 +143,7 @@ describe("分享方配对面板", () => {
       "已取消",
       "失败",
     );
-    render(<PairingPanel threadId="thread-1" previewReady />);
+    render(<PairingPanel threadId="thread-1" previewId="preview-1" previewReady />);
     fireEvent.click(screen.getByRole("button", { name: "创建一次性邀请" }));
     await waitFor(() => expect(screen.getByText("192.168.1.20:49152")).toBeInTheDocument());
 
@@ -126,7 +168,7 @@ describe("分享方配对面板", () => {
   it("到过期时间后显示已过期，并允许重新创建邀请", async () => {
     mockStart();
     mockPolling("等待配对");
-    render(<PairingPanel threadId="thread-1" previewReady />);
+    render(<PairingPanel threadId="thread-1" previewId="preview-1" previewReady />);
     fireEvent.click(screen.getByRole("button", { name: "创建一次性邀请" }));
     await waitFor(() => expect(screen.getByText("192.168.1.20:49152")).toBeInTheDocument());
 
@@ -146,7 +188,7 @@ describe("分享方配对面板", () => {
     mockStart();
     mockPolling("等待配对");
     mockTauri("revoke_share", { invitationId: "invitation-1" }, undefined);
-    render(<PairingPanel threadId="thread-1" previewReady />);
+    render(<PairingPanel threadId="thread-1" previewId="preview-1" previewReady />);
     fireEvent.click(screen.getByRole("button", { name: "创建一次性邀请" }));
     await waitFor(() => expect(screen.getByText("192.168.1.20:49152")).toBeInTheDocument());
 
@@ -162,7 +204,7 @@ describe("分享方配对面板", () => {
     mockStart();
     mockPolling("等待配对");
     mockTauri("cancel_share", { invitationId: "invitation-1" }, undefined);
-    render(<PairingPanel threadId="thread-1" previewReady />);
+    render(<PairingPanel threadId="thread-1" previewId="preview-1" previewReady />);
     fireEvent.click(screen.getByRole("button", { name: "创建一次性邀请" }));
     await waitFor(() => expect(screen.getByText("192.168.1.20:49152")).toBeInTheDocument());
 
@@ -175,7 +217,7 @@ describe("分享方配对面板", () => {
 
   it("创建失败和轮询失败显示固定中文错误，并允许重新创建", async () => {
     mockStart(new Error("secret=share-secret-value 与会话正文不该出现在错误里"));
-    render(<PairingPanel threadId="thread-1" previewReady />);
+    render(<PairingPanel threadId="thread-1" previewId="preview-1" previewReady />);
     fireEvent.click(screen.getByRole("button", { name: "创建一次性邀请" }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("无法创建分享，请确认局域网地址有效后重试"));
@@ -199,15 +241,15 @@ describe("分享方配对面板", () => {
   it("切换会话或预览失效时停止旧邀请轮询", async () => {
     mockStart();
     mockPolling("等待配对");
-    const { rerender } = render(<PairingPanel threadId="thread-1" previewReady />);
+    const { rerender } = render(<PairingPanel threadId="thread-1" previewId="preview-1" previewReady />);
     fireEvent.click(screen.getByRole("button", { name: "创建一次性邀请" }));
     await waitFor(() => expect(screen.getByText("192.168.1.20:49152")).toBeInTheDocument());
 
-    rerender(<PairingPanel threadId="thread-2" previewReady />);
+    rerender(<PairingPanel threadId="thread-2" previewId="preview-2" previewReady />);
     expect(screen.queryByLabelText("配对信息")).not.toBeInTheDocument();
     expect(screen.getByText("尚未开始分享")).toBeInTheDocument();
 
-    rerender(<PairingPanel threadId="thread-2" previewReady={false} />);
+    rerender(<PairingPanel threadId="thread-2" previewId={null} previewReady={false} />);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(4500);
     });

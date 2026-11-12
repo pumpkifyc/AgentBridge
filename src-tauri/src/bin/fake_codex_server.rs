@@ -76,6 +76,62 @@ fn item_entry(turn_id: &str, item: Value, timestamp: i64) -> Value {
 }
 
 fn thread_items_page(turn_id: &str, cursor: Option<&str>) -> Value {
+    if turn_id.is_empty() {
+        return if cursor.is_none() {
+            json!({
+                "data": [
+                    item_entry("turn-1", json!({
+                        "type": "userMessage",
+                        "id": "user-1",
+                        "content": [
+                            {"type": "text", "text": "Fix the login flow"},
+                            {"type": "localImage", "path": "/secret/image.png"}
+                        ]
+                    }), 110),
+                    item_entry("turn-1", json!({
+                        "type": "agentMessage",
+                        "id": "agent-1",
+                        "text": "I will inspect the flow."
+                    }), 120)
+                ],
+                "nextCursor": "items-page-2"
+            })
+        } else {
+            json!({
+                "data": [
+                    item_entry("turn-1", json!({
+                        "type": "commandExecution",
+                        "id": "call-1",
+                        "command": "echo secret; rm -rf /",
+                        "commandActions": [],
+                        "cwd": "/home/source/project",
+                        "status": "completed",
+                        "aggregatedOutput": "password=hunter2 found the login handler"
+                    }), 130),
+                    item_entry("turn-1", json!({
+                        "type": "mcpToolCall",
+                        "id": "tool-1",
+                        "server": "files",
+                        "tool": "read",
+                        "arguments": {"path": "/secret"},
+                        "status": "completed",
+                        "result": "found login module"
+                    }), 140),
+                    item_entry("turn-2", json!({
+                        "type": "userMessage",
+                        "id": "user-2",
+                        "content": [{"type": "text", "text": "Add a test"}]
+                    }), 210),
+                    item_entry("turn-2", json!({
+                        "type": "agentMessage",
+                        "id": "agent-2",
+                        "text": "Added the regression test."
+                    }), 220)
+                ],
+                "nextCursor": null
+            })
+        };
+    }
     if turn_id == "turn-1" && cursor.is_none() {
         return json!({
             "data": [
@@ -228,6 +284,41 @@ fn main() {
                         "id": id,
                         "result": thread_items_page(turn_id, cursor)
                     }));
+                }
+            }
+            "thread/items/list" => {
+                if mode == "unsupported-items" {
+                    emit_error(id, -32601, "thread/items/list is not supported yet");
+                } else {
+                    let turn_id = request["params"]["turnId"].as_str().unwrap_or_default();
+                    let cursor = request["params"]["cursor"].as_str();
+                    if mode == "current-protocol" && turn_id.is_empty() {
+                        emit(json!({
+                            "id": id,
+                            "result": {
+                                "data": [
+                                    json!({
+                                        "turnId": "turn-1",
+                                        "item": {"type": "agentMessage", "id": "agent-current", "text": "Whole thread page"},
+                                        "startedAtMs": 120_000,
+                                        "completedAtMs": 120_005
+                                    }),
+                                    json!({
+                                        "turnId": "turn-2",
+                                        "item": {"type": "userMessage", "id": "user-current", "content": [{"type": "text", "text": "Add a test"}]},
+                                        "startedAtMs": 210_000,
+                                        "completedAtMs": 210_005
+                                    })
+                                ],
+                                "nextCursor": null
+                            }
+                        }));
+                    } else {
+                        emit(json!({
+                            "id": id,
+                            "result": thread_items_page(turn_id, cursor)
+                        }));
+                    }
                 }
             }
             "thread/start" => {

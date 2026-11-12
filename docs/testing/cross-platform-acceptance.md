@@ -8,7 +8,7 @@
 | 项目 | macOS | Windows | 当前状态 |
 | --- | --- | --- | --- |
 | 自动化环境 | `macos-15`（GitHub Actions） | `windows-2022`（GitHub Actions） | 工作流已配置，尚未在 GitHub runner 执行 |
-| 本机开发构建 | macOS 15.6.0、Apple Silicon、Tauri CLI 2.12.4；`npm run tauri:build` 生成 `.app` 8.60 MiB 和 `.dmg` 4.20 MiB | 未执行 | macOS 已通过，Windows 须在原生 runner 执行 |
+| 本机开发构建 | macOS 15.6.0、Apple Silicon、Tauri CLI 2.12.4；`npm run tauri:build` 生成 `.app` 8.65 MiB 和 `.dmg` 4.22 MiB | 未执行 | macOS 已通过，Windows 须在原生 runner 执行 |
 | 前端测试 | `npm test -- --run` | 同左 | 双平台 CI 步骤已配置；本机结果见实施账本 |
 | Rust 测试 | `cargo test --manifest-path src-tauri/Cargo.toml` | 同左 | 双平台 CI 步骤已配置；本机结果见实施账本 |
 | 静态分析 | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 同左 | 双平台 CI 步骤已配置；本机结果见实施账本 |
@@ -21,7 +21,7 @@ CI 工作流位于 `.github/workflows/build.yml`，只上传未签名开发制�
 
 ## 兼容性前提
 
-分享方和接收方都需要安装版本匹配的 Codex CLI 与 Codex 桌面版，并且本机 `codex` 命令可用。当前开发环境的 CLI 0.142.2 与更高版本写入的桌面版状态库不匹配，`thread/list` 为空，历史分页接口返回 `-32601`；因此本机不能验证完整的桌面版会话列表与历史可见性。详细结果见 [Codex App Server 公开接口与本机兼容性记录](codex-app-server-compatibility.md)。
+分享方和接收方都需要安装版本匹配的 Codex CLI 与 Codex 桌面版，并且本机 `codex` 命令可用。当前 macOS 开发环境使用 Codex CLI 0.167.2，已确认 `thread/list`、`thread/turns/list` 和 `thread/items/list` 的当前公开协议可用。分享方界面会自动选择检测到的局域网 IPv4 地址，会话列表支持搜索；只有点击生成预览后才读取完整历史。详细结果见 [Codex App Server 公开接口与本机兼容性记录](codex-app-server-compatibility.md)。
 
 AgentBridge 只调用公开 App Server 接口，不读写 Codex 桌面版未公开数据库。导入时通过 `thread/start` 与 `turn/start` 创建接收方自己的 thread；桌面版历史是否立即显示该 thread 是发布前的双平台真机验收项。当前没有可依赖的公开 deep link，历史页面在无法打开时提供可复制的不可信历史续接提示。
 
@@ -70,7 +70,7 @@ AgentBridge 只调用公开 App Server 接口，不读写 Codex 桌面版未公�
 5. 桌面版不显示或会话丢失时，在 Codex 中新建会话、粘贴续接提示，确认历史作为引用文本出现且不会重放工具调用。
 6. 记录桌面版版本、CLI 版本、是否可见、打开结果和后备方案是否可用。
 
-**发布门槛：** 上述双向矩阵、两平台故障矩阵和桌面版可见性验收均须填完。若桌面版无法显示第三方创建的 thread，只能使用已记录的后备方案，不能改为写入桌面版内部存储。本机开发环境的版本不匹配不得被当作验收通过。
+**发布门槛：** 上述双向矩阵、两平台故障矩阵和桌面版可见性验收均须填完。若桌面版无法显示第三方创建的 thread，只能使用已记录的后备方案，不能改为写入桌面版内部存储。当前单机协议验证不能替代双平台真机验收。
 
 ## 已知限制
 

@@ -14,9 +14,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             commands::codex_status,
+            commands::list_local_addresses,
             commands::list_threads,
             commands::list_turns,
             commands::preview_snapshot,
+            commands::cancel_preview,
             commands::start_share,
             commands::share_status,
             commands::revoke_share,

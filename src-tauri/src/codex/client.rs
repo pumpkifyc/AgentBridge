@@ -22,6 +22,7 @@ const MAX_NOTIFICATIONS_PER_REQUEST: usize = 10_000;
 const TURN_PAGE_SIZE: u32 = 50;
 const ITEM_PAGE_SIZE: u32 = 50;
 const MAX_TURN_PAGES: usize = 200;
+const MAX_ITEM_PAGES: usize = 200;
 
 pub struct CodexClient {
     child: Child,
@@ -282,31 +283,43 @@ impl CodexClient {
         {
             return Err(CodexError::Snapshot(SnapshotError::InvalidCutoff));
         }
-        for turn in &mut turns {
-            let mut items = Vec::new();
-            let mut item_cursor: Option<String> = None;
-            for _ in 0..MAX_TURN_PAGES {
-                let response = self.request(
-                    "thread/turns/items/list",
-                    json!({
-                        "threadId": thread_id,
-                        "turnId": turn.id,
-                        "cursor": item_cursor,
-                        "limit": ITEM_PAGE_SIZE,
-                        "sortDirection": "asc"
-                    }),
-                )?;
-                let page: ThreadItemsPage = serde_json::from_value(response)
-                    .map_err(|error| CodexError::Protocol(error.to_string()))?;
-                items.extend(page.data.into_iter().map(|entry| {
-                    convert_item(entry.item, entry.started_at.or(entry.completed_at))
-                }));
-                item_cursor = page.next_cursor;
-                if item_cursor.is_none() {
-                    break;
-                }
+        let mut items_by_turn: std::collections::HashMap<String, Vec<CodexItem>> =
+            std::collections::HashMap::new();
+        let mut item_cursor: Option<String> = None;
+        for page_number in 0..MAX_ITEM_PAGES {
+            let response = self.request(
+                "thread/items/list",
+                json!({
+                    "threadId": thread_id,
+                    "cursor": item_cursor,
+                    "limit": ITEM_PAGE_SIZE,
+                    "sortDirection": "asc"
+                }),
+            )?;
+            let page: ThreadItemsPage = serde_json::from_value(response)
+                .map_err(|error| CodexError::Protocol(error.to_string()))?;
+            for entry in page.data {
+                let timestamp = entry
+                    .started_at_ms
+                    .map(|millis| millis / 1_000)
+                    .or_else(|| entry.completed_at_ms.map(|millis| millis / 1_000))
+                    .or(entry.started_at)
+                    .or(entry.completed_at);
+                items_by_turn
+                    .entry(entry.turn_id)
+                    .or_default()
+                    .extend(convert_item(entry.item, timestamp));
             }
-            turn.items = items.into_iter().flatten().collect();
+            item_cursor = page.next_cursor;
+            if item_cursor.is_none() {
+                break;
+            }
+            if page_number + 1 == MAX_ITEM_PAGES {
+                return Err(CodexError::Protocol("会话条目分页过多".into()));
+            }
+        }
+        for turn in &mut turns {
+            turn.items = items_by_turn.remove(&turn.id).unwrap_or_default();
         }
 
         let turns = turns
@@ -458,9 +471,12 @@ fn convert_item(item: ThreadItem, timestamp: Option<i64>) -> Vec<CodexItem> {
                 || CodexItem::Unsupported {
                     kind: format!("{server}/{tool}（无可读取结果）"),
                 },
-                |text| CodexItem::ToolResult {
+                |value| CodexItem::ToolResult {
                     name: format!("{server}/{tool}"),
-                    text,
+                    text: match value {
+                        serde_json::Value::String(text) => text,
+                        other => other.to_string(),
+                    },
                     timestamp,
                 },
             ),
@@ -572,10 +588,15 @@ struct ThreadItemsPage {
 #[serde(rename_all = "camelCase")]
 struct ThreadItemEntry {
     item: ThreadItem,
+    turn_id: String,
     #[serde(default)]
     started_at: Option<i64>,
     #[serde(default)]
     completed_at: Option<i64>,
+    #[serde(default)]
+    started_at_ms: Option<i64>,
+    #[serde(default)]
+    completed_at_ms: Option<i64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -596,7 +617,7 @@ enum ThreadItem {
     McpToolCall {
         server: String,
         tool: String,
-        result: Option<String>,
+        result: Option<serde_json::Value>,
     },
     #[serde(rename = "fileChange")]
     FileChange,

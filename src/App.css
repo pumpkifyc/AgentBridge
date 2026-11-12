@@ -155,6 +155,10 @@ button:focus-visible {
   font-size: 12px;
 }
 
+.warning-text {
+  color: #8a5a16;
+}
+
 .share-status {
   display: flex;
   align-items: center;
@@ -310,6 +314,22 @@ button:focus-visible {
   padding: 0;
   overflow: auto;
   list-style: none;
+}
+
+.thread-picker input[type="search"] {
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 9px 10px;
+  border: 1px solid #c7ced7;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.thread-empty {
+  padding: 24px 12px;
+  color: #68727f;
+  text-align: center;
 }
 
 .thread-row {

@@ -1,6 +1,6 @@
 use agentbridge_lib::{
     codex::models::Page,
-    commands::{ShareSession, StartShareRequest},
+    commands::{PreviewSnapshotRequest, ShareSession, StartShareRequest},
     pairing::{InvitationManager, InvitationState},
     snapshot::{
         schema::{MessageRole, SnapshotMessage, SnapshotMetadata, SnapshotV1},
@@ -136,10 +136,12 @@ fn completed_transfer_is_distinct_from_a_local_import() {
 fn start_share_uses_a_nested_camel_case_request_and_returns_the_tls_fingerprint() {
     let request: StartShareRequest = serde_json::from_value(json!({
         "threadId": "thread-1",
+        "previewId": "preview-1",
         "bindIp": "192.168.1.20"
     }))
     .expect("前端 start_share 请求应可解析");
     assert_eq!(request.thread_id, "thread-1");
+    assert_eq!(request.preview_id, "preview-1");
     assert_eq!(request.bind_ip, "192.168.1.20");
 
     let response = ShareSession {
@@ -156,4 +158,18 @@ fn start_share_uses_a_nested_camel_case_request_and_returns_the_tls_fingerprint(
     assert_eq!(wire["verificationCode"], "012345");
     assert_eq!(wire["expiresAt"], 1_800_000_300);
     assert_eq!(wire["state"], "等待配对");
+}
+
+#[test]
+fn preview_snapshot_uses_a_nested_camel_case_request_with_a_preview_token() {
+    let request: PreviewSnapshotRequest = serde_json::from_value(json!({
+        "threadId": "thread-1",
+        "cutoffTurnId": "turn-2",
+        "previewId": "preview-1"
+    }))
+    .expect("前端 preview_snapshot 请求应可解析");
+
+    assert_eq!(request.thread_id, "thread-1");
+    assert_eq!(request.cutoff_turn_id.as_deref(), Some("turn-2"));
+    assert_eq!(request.preview_id, "preview-1");
 }
