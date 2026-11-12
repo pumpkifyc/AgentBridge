@@ -111,11 +111,17 @@ describe("分享会话页面", () => {
   });
 
   it("Codex 不可用错误显示可执行的说明", async () => {
-    mockTauri("codex_status", {}, new Error("找不到 Codex CLI"));
+    mockTauri("codex_status", {}, new Error("找不到 Codex CLI"), true);
+    mockTauri("codex_status", {}, { state: "available", detail: "本机 Codex 可用" });
+    mockTauri("list_threads", { cursor: null }, { data: threads, nextCursor: null });
+    mockTauri("list_turns", "*", turns);
+    mockTauri("preview_snapshot", "*", snapshot());
     render(<SharePage />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("找不到 Codex CLI");
     expect(screen.getByText("请检查本机 Codex 安装后重试。", { exact: false })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新检查 Codex" }));
+    expect(await screen.findByText("快照预览")).toBeInTheDocument();
   });
 
   it("选择另一个会话后刷新截止轮次和预览", async () => {

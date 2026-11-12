@@ -110,7 +110,10 @@ impl LocalCodexClient for FakeCodexClient {
 fn retrying_a_completed_import_is_rejected_before_starting_codex() {
     let dir = unique_dir("completed-retry");
     let project = dir.join("receiver-project");
-    let staged = dir.join("staged-snapshots").join("staged.json");
+    let staged = dir.join("staged-snapshots").join(format!(
+        "{}.json",
+        agentbridge_lib::commands::staged_snapshot_digest("import-completed")
+    ));
     fs::create_dir_all(&project).expect("创建接收方项目");
     fs::create_dir_all(staged.parent().expect("暂存目录")).expect("创建暂存目录");
     fs::write(&staged, serde_json::to_vec(&snapshot()).expect("快照可序列化"))
@@ -133,7 +136,7 @@ fn retrying_a_completed_import_is_rejected_before_starting_codex() {
         Box::new(|| "replacement-import-id".into()),
     );
 
-    let error = retry_import_record(&service, &database, "import-completed", 1_800_000_200)
+    let error = retry_import_record(&service, &database, &dir, "import-completed", 1_800_000_200)
         .expect_err("已完成导入不能再创建 thread");
 
     assert_eq!(error.code, "notRetryable");
@@ -147,10 +150,49 @@ fn retrying_a_completed_import_is_rejected_before_starting_codex() {
 }
 
 #[test]
+fn importing_a_staged_snapshot_checks_its_filename_and_staging_directory() {
+    let dir = unique_dir("staging-validation");
+    let staged_dir = dir.join("staged-snapshots");
+    fs::create_dir_all(&staged_dir).expect("创建暂存目录");
+    let outside = dir.join("outside.json");
+    fs::write(&outside, serde_json::to_vec(&snapshot()).expect("快照可序列化"))
+        .expect("写入目录外快照");
+    let wrong_name = staged_dir.join("wrong.json");
+    fs::write(&wrong_name, serde_json::to_vec(&snapshot()).expect("快照可序列化"))
+        .expect("写入文件名不匹配的快照");
+
+    assert_eq!(
+        agentbridge_lib::commands::validate_staged_snapshot_path_for_test(
+            &dir,
+            &outside,
+        ).expect_err("目录外快照必须被拒绝").code,
+        "invalidSnapshot"
+    );
+    assert_eq!(
+        agentbridge_lib::commands::validate_staged_snapshot_path_for_test(
+            &dir,
+            &wrong_name,
+        ).expect_err("文件名不匹配的快照必须被拒绝").code,
+        "invalidSnapshot"
+    );
+
+    let digest = agentbridge_lib::commands::staged_snapshot_digest("share-1");
+    let valid = staged_dir.join(format!("{digest}.json"));
+    fs::write(&valid, serde_json::to_vec(&snapshot()).expect("快照可序列化"))
+        .expect("写入有效暂存快照");
+    agentbridge_lib::commands::validate_staged_snapshot_path_for_test(&dir, &valid)
+        .expect("有效暂存路径应通过检查");
+    fs::remove_dir_all(&dir).expect("清理测试目录");
+}
+
+#[test]
 fn retrying_a_failed_import_keeps_one_record_and_updates_retry_metadata() {
     let dir = unique_dir("failed-retry");
     let project = dir.join("receiver-project");
-    let staged = dir.join("staged-snapshots").join("staged.json");
+    let staged = dir.join("staged-snapshots").join(format!(
+        "{}.json",
+        agentbridge_lib::commands::staged_snapshot_digest("import-failed")
+    ));
     fs::create_dir_all(&project).expect("创建接收方项目");
     fs::create_dir_all(staged.parent().expect("暂存目录")).expect("创建暂存目录");
     fs::write(&staged, serde_json::to_vec(&snapshot()).expect("快照可序列化"))
@@ -171,7 +213,7 @@ fn retrying_a_failed_import_keeps_one_record_and_updates_retry_metadata() {
         Box::new(|| "unexpected-new-id".into()),
     );
 
-    let error = retry_import_record(&service, &database, "import-failed", 1_800_000_300)
+    let error = retry_import_record(&service, &database, &dir, "import-failed", 1_800_000_300)
         .expect_err("Codex 不可用时应报告失败");
     assert_eq!(error.code, "codexUnavailable");
 

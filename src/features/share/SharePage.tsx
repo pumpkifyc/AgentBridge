@@ -39,8 +39,9 @@ export function SharePage() {
   const [snapshot, setSnapshot] = useState<SnapshotV1 | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [checkCount, setCheckCount] = useState(0);
 
-  useEffect(() => {
+  const checkCodex = useCallback(() => {
     let active = true;
     async function load() {
       try {
@@ -60,6 +61,8 @@ export function SharePage() {
       active = false;
     };
   }, []);
+
+  useEffect(() => checkCodex(), [checkCodex, checkCount]);
 
   const threads = useMemo(
     () => (pageState.kind === "available" ? pageState.threads : []),
@@ -139,9 +142,21 @@ export function SharePage() {
   }
   if (pageState.kind === "error") {
     return (
-      <p className="notice error" role="alert">
-        Codex 不可用：{pageState.message}。请检查本机 Codex 安装后重试。
-      </p>
+      <div className="notice error" role="alert">
+        <p>Codex 不可用：{pageState.message}。请检查本机 Codex 安装后重试。</p>
+        <div className="action-row">
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => {
+              setPageState({ kind: "loading" });
+              setCheckCount((count) => count + 1);
+            }}
+          >
+            重新检查 Codex
+          </button>
+        </div>
+      </div>
     );
   }
   if (pageState.kind === "unsupported") {
@@ -150,14 +165,38 @@ export function SharePage() {
         <strong>当前 Codex 版本不兼容</strong>
         <p>{pageState.status.detail}</p>
         <p>请升级到 Codex 桌面版与 CLI 相互匹配的受支持版本。AgentBridge 不会读取桌面版内部数据库。</p>
+        <div className="action-row">
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => {
+              setPageState({ kind: "loading" });
+              setCheckCount((count) => count + 1);
+            }}
+          >
+            重新检查 Codex
+          </button>
+        </div>
       </div>
     );
   }
   if (pageState.kind === "empty") {
     return (
-      <p className="notice" role="status">
-        {pageState.status.detail || "本机没有可分享的 Codex 会话。"}
-      </p>
+      <div className="notice" role="status">
+        <p>{pageState.status.detail || "本机没有可分享的 Codex 会话。"}</p>
+        <div className="action-row">
+          <button
+            type="button"
+            className="secondary-action"
+            onClick={() => {
+              setPageState({ kind: "loading" });
+              setCheckCount((count) => count + 1);
+            }}
+          >
+            重新检查 Codex
+          </button>
+        </div>
+      </div>
     );
   }
 

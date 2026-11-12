@@ -488,7 +488,7 @@ fn staging_path(
     window: &WebviewWindow<impl TauriRuntime>,
     share_id: &str,
 ) -> Result<std::path::PathBuf, CommandError> {
-    let digest = hex::encode(sha2::Sha256::digest(share_id.as_bytes()));
+    let digest = staged_snapshot_digest(share_id);
     let directory = window
         .path()
         .app_data_dir()
@@ -586,20 +586,13 @@ pub fn import_snapshot(
         .map_err(|error| CommandError::new("invalidSnapshot", format!("读取暂存快照失败：{error}")))?;
     let snapshot = validate_snapshot(&bytes)
         .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
-    let staged_digest = hex::encode(Sha256::digest(request.share_id.as_bytes()));
-    let expected_filename = format!("{staged_digest}.json");
-    if snapshot_path.file_name().and_then(|name| name.to_str()) != Some(expected_filename.as_str()) {
-        return Err(CommandError::new(
-            "invalidSnapshot",
-            "暂存快照与分享标识不匹配，请重新接收分享",
-        ));
-    }
-    let project = std::path::Path::new(&request.project_path);
-    let database_path = window
+    let app_data_dir = window
         .path()
         .app_data_dir()
-        .map_err(|error| CommandError::new("databaseFailed", format!("无法定位应用数据目录：{error}")))?
-        .join("imports.db");
+        .map_err(|error| CommandError::new("databaseFailed", format!("无法定位应用数据目录：{error}")))?;
+    validate_staged_snapshot_path(&app_data_dir, &snapshot_path, &request.share_id)?;
+    let project = std::path::Path::new(&request.project_path);
+    let database_path = app_data_dir.join("imports.db");
     let database = ImportDatabase::open(database_path)
         .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
     state
@@ -629,9 +622,14 @@ pub fn retry_import(
     import_id: String,
 ) -> Result<ImportRecord, CommandError> {
     let database = open_database(&window)?;
+    let app_data_dir = window
+        .path()
+        .app_data_dir()
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
     retry_import_record(
         &state.import_service,
         &database,
+        &app_data_dir,
         &import_id,
         crate::pairing::invitation::unix_seconds(),
     )
@@ -640,6 +638,7 @@ pub fn retry_import(
 pub fn retry_import_record(
     service: &ImportService,
     database: &ImportDatabase,
+    app_data_dir: &std::path::Path,
     import_id: &str,
     retried_at: i64,
 ) -> Result<ImportRecord, CommandError> {
@@ -654,6 +653,7 @@ pub fn retry_import_record(
         ));
     }
     let snapshot_path = std::path::PathBuf::from(&previous.snapshot_path);
+    validate_staged_snapshot_path(app_data_dir, &snapshot_path, &previous.id)?;
     let bytes = fs::read(&snapshot_path).map_err(|error| {
         CommandError::new("invalidSnapshot", format!("读取暂存快照失败：{error}"))
     })?;
@@ -710,6 +710,42 @@ pub fn delete_import_files<F: FnOnce(&str)>(
         let _ = fs::remove_file(snapshot);
     }
     Ok(())
+}
+
+fn validate_staged_snapshot_path(
+    app_data_dir: &std::path::Path,
+    snapshot_path: &std::path::Path,
+    share_id: &str,
+) -> Result<(), CommandError> {
+    let staged_root = app_data_dir.join("staged-snapshots");
+    let filename = snapshot_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let canonical_root = staged_root.canonicalize().ok();
+    let canonical_snapshot = snapshot_path.canonicalize().ok();
+    let expected_name = format!("{}.json", staged_snapshot_digest(share_id));
+    if filename.is_empty()
+        || filename != expected_name
+        || !matches!((canonical_root, canonical_snapshot), (Some(root), Some(path)) if path.starts_with(&root) && path != root)
+    {
+        return Err(CommandError::new(
+            "invalidSnapshot",
+            "暂存快照路径无效，请重新接收分享",
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_staged_snapshot_path_for_test(
+    app_data_dir: &std::path::Path,
+    snapshot_path: &std::path::Path,
+) -> Result<(), CommandError> {
+    validate_staged_snapshot_path(app_data_dir, snapshot_path, "share-1")
+}
+
+pub fn staged_snapshot_digest(share_id: &str) -> String {
+    hex::encode(Sha256::digest(share_id.as_bytes()))
 }
 
 #[tauri::command]
