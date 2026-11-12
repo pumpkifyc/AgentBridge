@@ -19,6 +19,10 @@ interface PreparedPreview {
   snapshot: SnapshotV1;
 }
 
+interface Props {
+  active?: boolean;
+}
+
 function toPageState(status: CodexStatus, threads: ThreadSummary[]): SharePageState {
   if (status.state === "unsupported") {
     return { kind: "unsupported", status };
@@ -35,7 +39,7 @@ function toPageState(status: CodexStatus, threads: ThreadSummary[]): SharePageSt
   return { kind: "available", status, threads, turns: [] };
 }
 
-export function SharePage() {
+export function SharePage({ active = true }: Props) {
   const [pageState, setPageState] = useState<SharePageState>({ kind: "loading" });
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
@@ -167,6 +171,10 @@ export function SharePage() {
     }
   }
 
+  if (!active) {
+    return null;
+  }
+
   if (pageState.kind === "loading") {
     return <p className="notice" role="status">正在检查本机 Codex…</p>;
   }
@@ -259,6 +267,7 @@ export function SharePage() {
           </button>
         </section>
         <ConversationPreview
+          key={previewReady ? preview.id : "empty-preview"}
           snapshot={previewReady ? preview.snapshot : null}
           loading={false}
           error={previewError}

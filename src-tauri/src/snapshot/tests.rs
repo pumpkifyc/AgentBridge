@@ -192,6 +192,39 @@ fn redacts_common_credentials_from_messages_and_tool_summaries() {
 }
 
 #[test]
+fn aggregates_repeated_unsupported_item_warnings() {
+    let mut data = thread();
+    data.turns.truncate(1);
+    data.turns[0].items = vec![
+        CodexItem::Unsupported {
+            kind: "未知 Codex 历史条目".into(),
+        },
+        CodexItem::Unsupported {
+            kind: "未知 Codex 历史条目".into(),
+        },
+        CodexItem::Unsupported {
+            kind: "未知 Codex 历史条目".into(),
+        },
+        CodexItem::Binary {
+            mime_type: "image/png".into(),
+        },
+        CodexItem::Binary {
+            mime_type: "image/png".into(),
+        },
+    ];
+
+    let snapshot = convert_codex_items(data, None).unwrap();
+
+    assert_eq!(
+        snapshot.warnings,
+        vec![
+            "已省略不支持的 未知 Codex 历史条目 内容（共 3 项）",
+            "已省略二进制附件（image/png）（共 2 项）",
+        ]
+    );
+}
+
+#[test]
 fn validates_and_round_trips_a_valid_snapshot() {
     let bytes = serde_json::to_vec(&valid_snapshot()).unwrap();
     let parsed = validate_snapshot(&bytes).unwrap();

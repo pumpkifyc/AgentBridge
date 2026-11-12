@@ -22,6 +22,8 @@ Codex 提供了公开的 App Server JSON-RPC 接口。官方文档说明了 `ini
 
 应用启动时检查公开接口是否可用，并把 macOS 上已验证的 Codex CLI 0.167.2 设为当前最低兼容版本。低于该版本时，界面显示“当前 Codex 版本不兼容”及升级说明；若 `thread/list` 为空或历史分页接口不受支持，也不会继续预览。应用不会静默读取内部 SQLite，也不会改动桌面版数据库。
 
+macOS 从 Finder 启动的应用不会可靠继承终端 `PATH`。AgentBridge 会依次查找 `AGENTBRIDGE_CODEX_EXECUTABLE`、进程 `PATH`、`~/.local/bin`、`~/.npm-global/bin`、Volta、Cargo、Bun、NVM 当前安装目录，以及 Homebrew 和 macOS ChatGPT/Codex 桌面版的公开内置 CLI 位置。Windows 同时查找 `PATH`、`%APPDATA%\\npm` 和 `%LOCALAPPDATA%\\npm`。版本检查与 App Server 启动共用同一个解析结果，避免界面检查通过后却启动失败。
+
 会话列表只加载轻量元数据，并提供按标题、预览、工作目录和仓库标识即时搜索。选中会话只加载截止轮次；用户明确点击“生成分享预览”后才读取完整历史。每次预览由前端生成独立 `previewId`，Rust 将快照与会话 ID 绑定保存；切换会话、截止轮次、重新生成预览或离开页面时会取消旧令牌，迟到的异步结果也会被丢弃并清理。创建邀请必须同时提交匹配的 `threadId` 与 `previewId`，不能复用其他会话的旧预览。
 
 分享方界面自动检测非回环、非链路本地 IPv4 地址并优先选择局域网地址。只有检测不到局域网地址时才回退到 `127.0.0.1`，并明确提示该地址只适合本机测试。Rust 命令错误以结构化 `{ code, message }` 返回，前端提取中文 `message` 显示，不再出现 `[object Object]`。

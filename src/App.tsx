@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import "./App.css";
 import { ReceivePage } from "./features/receive/ReceivePage";
 import { HistoryPage } from "./features/history/HistoryPage";
@@ -6,8 +6,16 @@ import { SharePage } from "./features/share/SharePage";
 
 type View = "home" | "share" | "receive" | "history";
 
+const PersistentSharePage = memo(SharePage);
+
 function App() {
   const [view, setView] = useState<View>("home");
+  const [shareVisited, setShareVisited] = useState(false);
+
+  function openShare() {
+    setShareVisited(true);
+    setView("share");
+  }
 
   return (
     <main className="app-shell">
@@ -21,12 +29,12 @@ function App() {
 
       <nav className="main-nav" aria-label="主导航">
         <button type="button" className={view === "home" ? "active" : ""} onClick={() => setView("home")}>首页</button>
-        <button type="button" className={view === "share" ? "active" : ""} onClick={() => setView("share")}>分享会话</button>
+        <button type="button" className={view === "share" ? "active" : ""} onClick={openShare}>分享会话</button>
         <button type="button" className={view === "receive" ? "active" : ""} onClick={() => setView("receive")}>接收会话</button>
         <button type="button" className={view === "history" ? "active" : ""} onClick={() => setView("history")}>导入历史</button>
       </nav>
 
-      <div className="page-content">
+      <div className={`page-content page-content--${view}`}>
         {view === "home" && (
           <section className="empty-state" aria-labelledby="empty-state-title">
             <div className="empty-icon" aria-hidden="true">↔</div>
@@ -36,12 +44,14 @@ function App() {
               连接本机 Codex 后，你可以把一个会话安全地分享给局域网内的同事。
             </p>
             <div className="action-row">
-              <button type="button" className="primary-action" onClick={() => setView("share")}>分享会话</button>
+              <button type="button" className="primary-action" onClick={openShare}>分享会话</button>
               <button type="button" className="secondary-action" onClick={() => setView("receive")}>接收会话</button>
             </div>
           </section>
         )}
-        {view === "share" && <SharePage />}
+        {shareVisited && (
+          <PersistentSharePage active={view === "share"} />
+        )}
         {view === "receive" && <ReceivePage />}
         {view === "history" && <HistoryPage />}
       </div>

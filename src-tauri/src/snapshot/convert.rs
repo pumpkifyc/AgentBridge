@@ -100,10 +100,10 @@ pub fn convert_codex_items(
     };
 
     let mut messages = Vec::new();
-    let mut warnings = Vec::new();
+    let mut warnings = WarningCollector::default();
     for (turn_index, turn) in thread.turns.iter().take(included_turn_count).enumerate() {
         if turn.truncated {
-            warnings.push(format!("第 {} 轮历史内容已截断", turn_index + 1));
+            warnings.add(format!("第 {} 轮历史内容已截断", turn_index + 1));
         }
         for item in &turn.items {
             match item {
@@ -173,10 +173,10 @@ pub fn convert_codex_items(
                 }
                 CodexItem::ToolCall { .. } => {}
                 CodexItem::Binary { mime_type } => {
-                    warnings.push(format!("已省略二进制附件（{mime_type}）"));
+                    warnings.add(format!("已省略二进制附件（{mime_type}）"));
                 }
                 CodexItem::Unsupported { kind } => {
-                    warnings.push(format!("已省略不支持的 {kind} 内容"))
+                    warnings.add(format!("已省略不支持的 {kind} 内容"))
                 }
             }
         }
@@ -212,13 +212,42 @@ pub fn convert_codex_items(
             source_working_directory: thread.working_directory,
         },
         messages,
-        warnings,
+        warnings: warnings.finish(),
     })
 }
 
-fn add_redaction_warning(warnings: &mut Vec<String>) {
-    let warning = "检测到疑似凭据，已在快照中隐藏".to_owned();
-    if !warnings.contains(&warning) {
-        warnings.push(warning);
+#[derive(Default)]
+struct WarningCollector {
+    entries: Vec<(String, usize)>,
+}
+
+impl WarningCollector {
+    fn add(&mut self, warning: String) {
+        if let Some((_, count)) = self
+            .entries
+            .iter_mut()
+            .find(|(existing, _)| existing == &warning)
+        {
+            *count += 1;
+        } else {
+            self.entries.push((warning, 1));
+        }
     }
+
+    fn finish(self) -> Vec<String> {
+        self.entries
+            .into_iter()
+            .map(|(warning, count)| {
+                if count > 1 {
+                    format!("{warning}（共 {count} 项）")
+                } else {
+                    warning
+                }
+            })
+            .collect()
+    }
+}
+
+fn add_redaction_warning(warnings: &mut WarningCollector) {
+    warnings.add("检测到疑似凭据，已在快照中隐藏".to_owned());
 }

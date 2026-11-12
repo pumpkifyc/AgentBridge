@@ -1,5 +1,6 @@
 use super::{
     error::CodexError,
+    executable::resolve_codex_executable,
     models::{Page, ThreadSummary, TurnSummary},
     protocol::{RpcRequest, RpcResponse},
 };
@@ -36,9 +37,7 @@ pub struct CodexClient {
 
 impl CodexClient {
     pub fn connect() -> Result<Self, CodexError> {
-        let executable =
-            std::env::var_os("AGENTBRIDGE_CODEX_EXECUTABLE").unwrap_or_else(|| "codex".into());
-        Self::connect_with_executable(executable)
+        Self::connect_with_executable(resolve_codex_executable()?)
     }
 
     pub fn connect_with_executable(

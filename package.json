@@ -11,7 +11,8 @@
     "test": "vitest",
     "test:e2e-config": "node --test e2e/*.test.mjs",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "tauri:install": "tauri build && node scripts/install-latest.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -21,6 +22,8 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@emnapi/core": "^2.0.0-beta.2",
+    "@emnapi/runtime": "^2.0.0-beta.2",
     "@tauri-apps/cli": "^2",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",

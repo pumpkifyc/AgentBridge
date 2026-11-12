@@ -1,14 +1,20 @@
 .app-shell {
-  min-height: 100vh;
-  background: #f6f7f9;
+  display: flex;
+  width: 100%;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  flex-direction: column;
+  background: linear-gradient(180deg, #f8fafc 0%, #f3f5f8 100%);
   color: #18202a;
 }
 
 .topbar {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
-  padding: 28px 40px;
+  padding: 18px 32px;
   border-bottom: 1px solid #dfe3e8;
   background: #fff;
 }
@@ -29,7 +35,7 @@ p {
 
 h1 {
   margin-bottom: 0;
-  font-size: 24px;
+  font-size: 26px;
   line-height: 1.2;
 }
 
@@ -40,17 +46,23 @@ h2 {
 }
 
 .connection-status {
-  color: #68727f;
-  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid #dce3ea;
+  border-radius: 999px;
+  color: #5f6b78;
+  background: #f8fafc;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .empty-state {
   display: flex;
-  min-height: calc(100vh - 100px);
+  min-height: 0;
   align-items: center;
   flex-direction: column;
+  flex: 1;
   justify-content: center;
-  padding: 48px 24px;
+  padding: 24px;
   text-align: center;
 }
 
@@ -114,7 +126,7 @@ button:focus-visible {
   }
 
   .empty-state {
-    min-height: calc(100vh - 132px);
+    min-height: 0;
   }
 }
 
@@ -232,8 +244,9 @@ button:focus-visible {
 
 .main-nav {
   display: flex;
+  flex: 0 0 auto;
   gap: 8px;
-  padding: 12px 40px;
+  padding: 10px 32px;
   border-bottom: 1px solid #dfe3e8;
   background: #fff;
 }
@@ -243,6 +256,7 @@ button:focus-visible {
   color: #4a5665;
   background: transparent;
   font-size: 13px;
+  transition: border-color 140ms ease, color 140ms ease, background 140ms ease;
 }
 
 .main-nav button.active {
@@ -252,12 +266,20 @@ button:focus-visible {
 }
 
 .page-content {
-  padding: 24px 40px 40px;
+  width: 100%;
+  max-width: 1600px;
+  min-height: 0;
+  margin: 0 auto;
+  padding: 22px 32px 32px;
+  overflow: auto;
+  flex: 1;
+  scrollbar-gutter: stable;
 }
 
-.empty-state {
-  min-height: calc(100vh - 190px);
-  padding: 24px;
+.page-content--home {
+  display: flex;
+  overflow: hidden;
+  scrollbar-gutter: auto;
 }
 
 .notice {
@@ -280,15 +302,21 @@ button:focus-visible {
 .share-layout {
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-  gap: 20px;
+  gap: 22px;
   align-items: start;
 }
 
 .panel {
   padding: 20px;
-  border: 1px solid #dfe3e8;
-  border-radius: 10px;
+  border: 1px solid #dce3ea;
+  border-radius: 12px;
   background: #fff;
+  box-shadow: 0 8px 24px rgb(31 45 61 / 5%);
+}
+
+.thread-picker {
+  position: sticky;
+  top: 0;
 }
 
 .panel-heading {
@@ -309,7 +337,7 @@ button:focus-visible {
 }
 
 .thread-list {
-  max-height: 320px;
+  max-height: clamp(260px, 38vh, 430px);
   margin: 0 0 20px;
   padding: 0;
   overflow: auto;
@@ -413,7 +441,7 @@ select {
 }
 
 .message-list {
-  max-height: 460px;
+  max-height: clamp(280px, 46vh, 560px);
   margin: 0;
   padding: 0 0 0 24px;
   overflow: auto;
@@ -424,6 +452,8 @@ select {
   padding: 12px 14px;
   border-radius: 8px;
   background: #f6f8fa;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
 }
 
 .message.assistant {
@@ -445,6 +475,10 @@ select {
 .tool-summary {
   color: #52606e;
   font-size: 12px;
+}
+
+.message-load-earlier {
+  margin-bottom: 12px;
 }
 
 .project-picker input {

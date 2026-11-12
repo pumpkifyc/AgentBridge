@@ -297,11 +297,10 @@ mod preview_registry_tests {
 }
 
 fn with_codex<T>(
-    state: &AppState,
+    codex: &Arc<Mutex<Option<CodexClient>>>,
     action: impl FnOnce(&mut CodexClient) -> Result<T, CommandError>,
 ) -> Result<T, CommandError> {
-    let mut guard = state
-        .codex
+    let mut guard = codex
         .lock()
         .map_err(|_| CommandError::new("codexUnavailable", "Codex 连接状态不可用"))?;
     if guard.is_none() {
@@ -313,6 +312,16 @@ fn with_codex<T>(
         *guard = None;
     }
     result
+}
+
+async fn run_codex_command<T: Send + 'static>(
+    state: &AppState,
+    action: impl FnOnce(&mut CodexClient) -> Result<T, CommandError> + Send + 'static,
+) -> Result<T, CommandError> {
+    let codex = Arc::clone(&state.codex);
+    tokio::task::spawn_blocking(move || with_codex(&codex, action))
+        .await
+        .map_err(|error| CommandError::new("codexUnavailable", error.to_string()))?
 }
 
 fn local_ipv4_addresses() -> Vec<LocalAddress> {
@@ -361,7 +370,9 @@ fn compatible(version: &str) -> bool {
 }
 
 fn codex_version() -> Result<String, CommandError> {
-    let output = std::process::Command::new("codex")
+    let executable = crate::codex::executable::resolve_codex_executable()
+        .map_err(CommandError::from)?;
+    let output = std::process::Command::new(executable)
         .arg("--version")
         .output()
         .map_err(|error| CommandError::new("notInstalled", format!("找不到 Codex CLI：{error}")))?;
@@ -375,22 +386,14 @@ fn codex_version() -> Result<String, CommandError> {
 }
 
 #[tauri::command]
-pub fn codex_status(state: State<'_, AppState>) -> Result<CodexStatus, CommandError> {
-    let version = codex_version()?;
+pub async fn codex_status() -> Result<CodexStatus, CommandError> {
+    let version = tokio::task::spawn_blocking(codex_version)
+        .await
+        .map_err(|error| CommandError::new("codexUnavailable", error.to_string()))??;
     if !compatible(&version) {
         return Ok(CodexStatus {
             state: "unsupported".into(),
             detail: format!("Codex CLI {version} 版本过低，请升级到与桌面版匹配的版本。"),
-            version: Some(version),
-        });
-    }
-    let page = with_codex(&state, |client| {
-        client.list_threads(None).map_err(CommandError::from)
-    })?;
-    if page.data.is_empty() {
-        return Ok(CodexStatus {
-            state: "unsupported".into(),
-            detail: "本机 Codex 没有通过公开接口返回会话。请确认桌面版与 CLI 版本一致，且会话均为受支持的历史格式。".into(),
             version: Some(version),
         });
     }
@@ -402,23 +405,25 @@ pub fn codex_status(state: State<'_, AppState>) -> Result<CodexStatus, CommandEr
 }
 
 #[tauri::command]
-pub fn list_threads(
+pub async fn list_threads(
     state: State<'_, AppState>,
     cursor: Option<String>,
 ) -> Result<Page<crate::codex::models::ThreadSummary>, CommandError> {
-    with_codex(&state, |client| {
+    run_codex_command(&state, move |client| {
         client.list_threads(cursor).map_err(CommandError::from)
     })
+    .await
 }
 
 #[tauri::command]
-pub fn list_turns(
+pub async fn list_turns(
     state: State<'_, AppState>,
     thread_id: String,
 ) -> Result<Vec<crate::codex::models::TurnSummary>, CommandError> {
-    with_codex(&state, |client| {
+    run_codex_command(&state, move |client| {
         client.list_turns(&thread_id).map_err(CommandError::from)
     })
+    .await
 }
 
 #[tauri::command]
@@ -427,28 +432,14 @@ pub async fn preview_snapshot(
     request: PreviewSnapshotRequest,
 ) -> Result<SnapshotV1, CommandError> {
     request.validate()?;
-    let client = Arc::clone(&state.codex);
     let read_thread_id = request.thread_id.clone();
     let cutoff_turn_id = request.cutoff_turn_id.clone();
-    let snapshot = tokio::task::spawn_blocking(move || {
-        let mut guard = client
-            .lock()
-            .map_err(|_| CommandError::new("codexUnavailable", "Codex 连接状态不可用"))?;
-        if guard.is_none() {
-            *guard = Some(CodexClient::connect().map_err(CommandError::from)?);
-        }
-        let result = guard
-            .as_mut()
-            .expect("Codex 连接已初始化")
+    let snapshot = run_codex_command(&state, move |client| {
+        client
             .read_snapshot(&read_thread_id, cutoff_turn_id.as_deref())
-            .map_err(CommandError::from);
-        if result.is_err() {
-            *guard = None;
-        }
-        result
+            .map_err(CommandError::from)
     })
-    .await
-    .map_err(|error| CommandError::new("codexUnavailable", error.to_string()))??;
+    .await?;
     let bytes = serde_json::to_vec(&snapshot)
         .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
     let validated = validate_snapshot(&bytes)

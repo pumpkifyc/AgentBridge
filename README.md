@@ -14,8 +14,15 @@ AgentBridge 是一款用于在局域网内分享 Codex 会话上下文的 macOS 
 - `npm run test:e2e-config`：检查双平台打包配置、CI 步骤和中文验收文档。
 - `npm run build`：构建前端资源。
 - `npm run tauri:build`：构建当前平台桌面安装包。
+- `npm run tauri:install`：构建当前平台最新版并自动安装、重新打开；macOS 覆盖 `/Applications/AgentBridge.app`，Windows 静默运行最新 NSIS 安装包。
 
 Windows 安装包需在 Windows 主机或 CI runner 上构建。
+
+## 找不到 Codex CLI
+
+从 Finder 或开始菜单启动桌面应用时，进程通常不会继承终端里的完整 `PATH`。AgentBridge 会依次检查显式配置、当前 `PATH`、用户级 npm/Homebrew/Cargo 安装目录，以及 macOS ChatGPT/Codex 桌面版的公开内置 CLI 位置。当前默认优先支持 npm 全局安装在 `~/.local/bin/codex` 或 `~/.npm-global/bin/codex` 的情况。
+
+如果 Codex 安装在其他位置，可在启动 AgentBridge 前设置 `AGENTBRIDGE_CODEX_EXECUTABLE` 为 `codex` 可执行文件的完整路径。应用只启动该 CLI 的公开 `app-server --stdio` 接口，不读取桌面版内部数据库。
 
 ## 第一版使用流程
 

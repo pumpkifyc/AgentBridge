@@ -14,6 +14,17 @@ test("macOS 与 Windows 安装包目标都已配置", () => {
   assert.equal(config.bundle.macOS.minimumSystemVersion, "11.0");
 });
 
+test("桌面窗口以工作台尺寸打开并保留可用的最小边界", () => {
+  assert.deepEqual(config.app.windows[0], {
+    title: "AgentBridge",
+    width: 1450,
+    height: 900,
+    minWidth: 1040,
+    minHeight: 720,
+    center: true,
+  });
+});
+
 test("Windows NSIS 使用当前用户安装且配置可被 Tauri 解析", () => {
   assert.equal(config.bundle.windows.nsis.installMode, "currentUser");
   assert.match(workflow, /macos-15/);
