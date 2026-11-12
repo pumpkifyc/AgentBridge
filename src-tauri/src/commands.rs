@@ -629,33 +629,87 @@ pub fn retry_import(
     import_id: String,
 ) -> Result<ImportRecord, CommandError> {
     let database = open_database(&window)?;
+    retry_import_record(
+        &state.import_service,
+        &database,
+        &import_id,
+        crate::pairing::invitation::unix_seconds(),
+    )
+}
+
+pub fn retry_import_record(
+    service: &ImportService,
+    database: &ImportDatabase,
+    import_id: &str,
+    retried_at: i64,
+) -> Result<ImportRecord, CommandError> {
     let previous = database
-        .get(&import_id)
+        .get(import_id)
         .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?
         .ok_or_else(|| CommandError::new("notFound", "找不到导入记录"))?;
-    database
-        .mark_retried(&import_id, crate::pairing::invitation::unix_seconds())
-        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
+    if previous.status == "completed" {
+        return Err(CommandError::new(
+            "notRetryable",
+            "该导入已完成，不能重复创建 Codex 会话",
+        ));
+    }
     let snapshot_path = std::path::PathBuf::from(&previous.snapshot_path);
-    let bytes = fs::read(&snapshot_path)
-        .map_err(|error| CommandError::new("invalidSnapshot", format!("读取暂存快照失败：{error}")))?;
+    let bytes = fs::read(&snapshot_path).map_err(|error| {
+        CommandError::new("invalidSnapshot", format!("读取暂存快照失败：{error}"))
+    })?;
     let snapshot = validate_snapshot(&bytes)
         .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
-    let mut record = state
-        .import_service
+    database
+        .mark_retried(import_id, retried_at)
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
+    let mut record = service
         .create_local_thread(
             &snapshot,
             std::path::Path::new(&previous.project_path),
             &snapshot_path,
-            &database,
+            database,
         )
         .map_err(map_import_error)?;
-    record.id = import_id;
+    record.id = import_id.to_owned();
     record.retry_count = previous.retry_count + 1;
+    record.last_retried_at = Some(retried_at);
     database
         .upsert(&record)
         .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
     Ok(record)
+}
+
+pub fn delete_import_files<F: FnOnce(&str)>(
+    database: &ImportDatabase,
+    app_data_dir: &std::path::Path,
+    import_id: &str,
+    remove_staged: F,
+) -> Result<(), CommandError> {
+    let record = database
+        .get(import_id)
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
+    database
+        .delete(import_id)
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
+    let Some(record) = record else {
+        return Ok(());
+    };
+    if record.snapshot_path.is_empty() {
+        return Ok(());
+    }
+    remove_staged(&record.snapshot_path);
+    let staged_root = app_data_dir.join("staged-snapshots");
+    let snapshot = std::path::Path::new(&record.snapshot_path);
+    let canonical_staged_root = staged_root.canonicalize().ok();
+    let canonical_snapshot = snapshot.canonicalize().ok();
+    let inside_staged_root = match (canonical_staged_root, canonical_snapshot) {
+        (Some(root), Some(path)) => path.starts_with(&root) && path != root,
+        _ => false,
+    };
+    if inside_staged_root {
+        let _ = fs::remove_file(snapshot);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -712,38 +766,19 @@ pub fn delete_import(
     state: State<'_, ReceiveState>,
     import_id: String,
 ) -> Result<(), CommandError> {
-    let database_path = window
+    let app_data_dir = window
         .path()
         .app_data_dir()
-        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?
-        .join("imports.db");
-    let record = ImportDatabase::open(database_path)
-        .and_then(|database| {
-            let record = database.get(&import_id)?;
-            database.delete(&import_id)?;
-            Ok(record)
-        })
         .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
-    if let Some(record) = record
-        && !record.snapshot_path.is_empty()
-    {
-                state
-                    .staged
-                    .lock()
-                    .expect("暂存锁已中毒")
-                    .retain(|_, staged| staged.snapshot_path != record.snapshot_path);
-                let snapshot = std::path::Path::new(&record.snapshot_path);
-                if snapshot.starts_with(
-                    window
-                        .path()
-                        .app_data_dir()
-                        .unwrap_or_default()
-                        .join("staged-snapshots"),
-                ) {
-                    let _ = fs::remove_file(snapshot);
-                }
-    }
-    Ok(())
+    let database = ImportDatabase::open(app_data_dir.join("imports.db"))
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
+    delete_import_files(&database, &app_data_dir, &import_id, |snapshot_path| {
+        state
+            .staged
+            .lock()
+            .expect("暂存锁已中毒")
+            .retain(|_, staged| staged.snapshot_path != snapshot_path);
+    })
 }
 
 fn open_database(

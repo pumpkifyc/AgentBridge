@@ -350,6 +350,13 @@ async fn handle_connection(
         } else {
             ErrorCode::Unauthorized
         };
+        // 拒绝后等待对端先关闭连接，避免 TCP RST 抢在错误行被读取之前到达。
+        let mut discarded = String::new();
+        let _ = tokio::time::timeout(
+            Duration::from_millis(200),
+            reader.read_line(&mut discarded),
+        )
+        .await;
         let _ = send(
             &mut writer,
             &ServerMessage::Error {

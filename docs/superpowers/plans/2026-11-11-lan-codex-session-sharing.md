@@ -63,7 +63,8 @@ e2e/                         打包应用的跨平台验收检查
 - [x] 生成启用 macOS 和 Windows 目标平台的 Tauri 2 React/TypeScript 项目框架。
 - [x] 添加冒烟测试，打开应用后检查窗口标题和空状态标题。
 - [x] 运行 `npm run build` 和 `cargo check --manifest-path src-tauri/Cargo.toml`。
-- [ ] 在对应原生 Runner 上构建平台安装包；macOS 本地包已生成，Windows 包待 Windows 原生 Runner 验证；开发构建与正式签名、公证的要求分开记录。
+- [x] 配置双平台构建并生成 macOS 本地包；`npm run tauri:build` 已通过并生成 `.app` / `.dmg`。
+- [ ] 在 Windows 原生 Runner 上构建 NSIS 安装包，并在两个原生 Runner 上运行 CI；正式签名与公证另行记录。
 
 ## Task 2：定义并校验快照协议
 
@@ -242,11 +243,11 @@ e2e/                         打包应用的跨平台验收检查
 - CI 在 macOS 和 Windows runner 上构建未签名的开发制品。
 - 手工验收矩阵记录分享方系统、接收方系统、Codex 版本、配对、传输、导入、桌面版可见性、后备方案和清理结果。
 
-- [ ] 配置 Tauri 安装包和 CI macOS/Windows 任务，不提交签名密钥或其他秘密。
-- [ ] 在两个 runner 上运行静态分析、Rust 测试、前端测试和发布构建。
+- [x] 配置 Tauri 安装包和 CI macOS/Windows 任务，不提交签名密钥或其他秘密；本机配置检查与 macOS 发布构建已通过。
+- [ ] 在两个 runner 上运行静态分析、Rust 测试、前端测试和发布构建；工作流已配置，GitHub runner 执行结果待填写。
 - [ ] 双向执行验收流程：macOS 分享到 Windows，以及 Windows 分享到 macOS。
 - [ ] 两个平台都验证错误/过期配对、拒绝分享、传输中断、重试、Codex 缺失和桌面版可见性后备方案。
-- [ ] 记录已知平台限制和最低测试 Codex 版本。
+- [x] 记录已知平台限制；最低测试 Codex 版本留作双平台真机验收后填写。
 
 ## 依赖顺序
 

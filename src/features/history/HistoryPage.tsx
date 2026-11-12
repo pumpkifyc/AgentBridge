@@ -24,8 +24,8 @@ export function HistoryPage() {
   async function retry(record: ImportRecord) {
     try {
       const updated = await historyApi.retry(record.id);
-      setRecords((previous) => previous.map((item) => item.id === updated.id ? updated : item));
-      setNotice("重试已完成");
+      await load();
+      setNotice(updated.status === "failed" ? "重试失败，请查看记录中的错误说明" : "重试已完成");
       setError(null);
     } catch {
       setError("重试失败，请确认 Codex 可用且本机项目目录仍存在。");
@@ -48,7 +48,7 @@ export function HistoryPage() {
       setNotice("续接提示已复制到剪贴板");
       setError(null);
     } catch {
-      setError("无法复制续接提示，请检查系统剪贴板权限。");
+      setError("无法复制续接提示，请检查系统剪贴板权限，或先重试失败的导入。");
     }
   }
 
@@ -58,7 +58,7 @@ export function HistoryPage() {
     }
     try {
       await historyApi.remove(pendingDelete.id);
-      setRecords((previous) => previous.filter((item) => item.id !== pendingDelete.id));
+      await load();
       setNotice("已删除导入记录");
       setError(null);
     } catch {

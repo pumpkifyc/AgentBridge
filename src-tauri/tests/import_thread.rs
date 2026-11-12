@@ -12,6 +12,7 @@ use agentbridge_lib::{
     },
 };
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -135,6 +136,23 @@ fn creates_a_new_thread_in_the_receiver_project_and_persists_an_import_record() 
     fs::remove_dir_all(&dir).expect("清理测试目录");
 }
 
+#[test]
+fn default_import_service_gives_each_local_record_a_unique_random_id() {
+    let service = ImportService::default();
+    let first = service.new_record_id();
+    let second = service.new_record_id();
+    let ids: HashSet<_> = [first.as_str(), second.as_str()].into_iter().collect();
+    assert_eq!(ids.len(), 2, "连续生成的记录 ID 必须各不相同");
+    assert!(
+        ids.iter().all(|id| {
+            id.strip_prefix("import-")
+                .is_some_and(|value| value.len() == 32
+                    && value.chars().all(|character| character.is_ascii_hexdigit()))
+        }),
+        "记录 ID 应由 16 个随机字节派生"
+    );
+}
+
 struct FakeCodexClient {
     cwd: Option<String>,
     prompt: Option<String>,
@@ -233,6 +251,39 @@ fn sqlite_history_supports_retry_metadata_and_deletes_only_local_data() {
     assert_eq!(database.list().expect("可列出记录")[0].retry_count, 1);
     database.delete("import-1").expect("应删除记录");
     assert!(database.list().expect("可列出记录").is_empty());
+    fs::remove_dir_all(&dir).expect("清理测试目录");
+}
+
+#[test]
+fn replays_of_the_same_import_keep_its_retry_metadata() {
+    let dir = unique_dir("upsert-retry");
+    let database = ImportDatabase::open(dir.join("imports.db")).expect("数据库可打开");
+    let mut record = ImportRecord {
+        id: "import-1".into(),
+        source_title: "修复登录流程".into(),
+        local_thread_id: String::new(),
+        project_path: "/Users/receiver/local-project".into(),
+        imported_at: 1_800_000_100,
+        snapshot_path: dir.join("staged.json").to_string_lossy().into_owned(),
+        status: "pending".into(),
+        error: None,
+        continuation_prompt: Some("不可信历史提示".into()),
+        retry_count: 2,
+        last_retried_at: Some(1_800_000_200),
+    };
+    database.upsert(&record).expect("应保存首次记录");
+    record.status = "completed".into();
+    record.local_thread_id = "local-thread-1".into();
+    database.upsert(&record).expect("应更新同一条记录");
+    let records = database.list().expect("可列出导入记录");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].status, "completed");
+    assert_eq!(records[0].retry_count, 2, "重试次数不能被状态更新重置");
+    assert_eq!(
+        records[0].last_retried_at,
+        Some(1_800_000_200),
+        "最近重试时间不能被状态更新清空"
+    );
     fs::remove_dir_all(&dir).expect("清理测试目录");
 }
 

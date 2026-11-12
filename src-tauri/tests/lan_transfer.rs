@@ -191,7 +191,10 @@ async fn wrong_credentials_are_rejected_and_rate_limited() {
         )
         .await
         .expect_err("错误凭据必须被拒绝");
-        assert!(matches!(error, TransferClientError::Rejected(_, _)));
+        assert!(
+            matches!(error, TransferClientError::Rejected(_, _)),
+            "错误凭据应收到协议拒绝，实际为 {error:?}"
+        );
     }
     let error = TransferClient::preview(
         &invitation.endpoint,

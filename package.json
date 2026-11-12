@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest",
+    "test:e2e-config": "node --test e2e/*.test.mjs",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },

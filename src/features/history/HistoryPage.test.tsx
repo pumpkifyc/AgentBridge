@@ -78,4 +78,26 @@ describe("导入历史页面", () => {
       expect(screen.getByRole("status")).toHaveTextContent("已删除导入记录");
     });
   });
+
+  it("重试后重新读取导入历史，显示后端新增的失败记录", async () => {
+    const failedRetry = {
+      id: "import-3",
+      sourceTitle: "重构导入",
+      localThreadId: "",
+      projectPath: "C:\\Users\\receiver\\project",
+      importedAt: 1_800_000_500,
+      snapshotPath: "C:\\Users\\receiver\\AppData\\staged.json",
+      status: "failed",
+      error: "Codex 仍不可用",
+      retryCount: 2,
+    };
+    mockTauri("list_imports", "*", records, true);
+    mockTauri("list_imports", "*", [...records, failedRetry]);
+    mockTauri("retry_import", { importId: "import-2" }, failedRetry);
+    render(<HistoryPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "重试导入" }));
+    expect(await screen.findByText("Codex 仍不可用")).toBeInTheDocument();
+    expect(screen.getByText("重试失败，请查看记录中的错误说明")).toBeInTheDocument();
+  });
 });

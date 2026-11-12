@@ -7,6 +7,7 @@ use crate::{
     codex::{client::CodexClient, error::CodexError},
     snapshot::schema::SnapshotV1,
 };
+use getrandom::fill as fill_random;
 use std::{
     path::Path,
     time::Duration,
@@ -69,18 +70,7 @@ impl Default for ImportService {
             client_factory: Box::new(|_| {
                 Ok(Box::new(CodexAdapter(CodexClient::connect().map_err(map_codex_error)?)))
             }),
-            record_id_factory: Box::new(|| {
-                use sha2::{Digest, Sha256};
-                let digest = Sha256::digest(
-                    format!(
-                        "{}-{}",
-                        crate::pairing::invitation::unix_seconds(),
-                        std::process::id()
-                    )
-                    .as_bytes(),
-                );
-                format!("import-{}", hex::encode(digest))
-            }),
+            record_id_factory: Box::new(new_random_record_id),
             thread_checker: Box::new(|thread_id| {
                 CodexClient::connect()
                     .and_then(|mut client| client.find_thread(thread_id))
@@ -90,6 +80,12 @@ impl Default for ImportService {
             }),
         }
     }
+}
+
+fn new_random_record_id() -> String {
+    let mut bytes = [0u8; 16];
+    fill_random(&mut bytes).expect("操作系统随机数生成器失败");
+    format!("import-{}", hex::encode(bytes))
 }
 
 impl ImportService {
@@ -114,6 +110,10 @@ impl ImportService {
 
     pub fn thread_exists(&self, thread_id: &str) -> bool {
         (self.thread_checker)(thread_id)
+    }
+
+    pub fn new_record_id(&self) -> String {
+        (self.record_id_factory)()
     }
 
     pub fn create_local_thread(
@@ -149,7 +149,7 @@ impl ImportService {
         if prompt.len() > MAX_PROMPT_BYTES {
             return Err(ImportError::PromptTooLarge);
         }
-        let id = (self.record_id_factory)();
+        let id = self.new_record_id();
         let imported_at = crate::pairing::invitation::unix_seconds();
         let mut record = ImportRecord {
             id,
