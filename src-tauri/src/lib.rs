@@ -13,4 +13,5 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+pub mod codex;
 pub mod snapshot;

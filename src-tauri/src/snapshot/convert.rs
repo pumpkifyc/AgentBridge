@@ -27,7 +27,7 @@ pub struct ThreadTurn {
     pub items: Vec<CodexItem>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CodexItem {
     UserText {
