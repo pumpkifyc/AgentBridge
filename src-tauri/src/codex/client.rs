@@ -277,10 +277,10 @@ impl CodexClient {
             .ok_or_else(|| CodexError::ThreadNotFound(thread_id.into()))?;
 
         let mut turns = self.list_turns(thread_id)?;
-        if let Some(cutoff) = cutoff_turn_id {
-            if !turns.iter().any(|turn| turn.id == cutoff && turn.completed) {
-                return Err(CodexError::Snapshot(SnapshotError::InvalidCutoff));
-            }
+        if let Some(cutoff) = cutoff_turn_id
+            && !turns.iter().any(|turn| turn.id == cutoff && turn.completed)
+        {
+            return Err(CodexError::Snapshot(SnapshotError::InvalidCutoff));
         }
         for turn in &mut turns {
             let mut items = Vec::new();
