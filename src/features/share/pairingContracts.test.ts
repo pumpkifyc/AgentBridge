@@ -23,22 +23,32 @@ describe("配对信息契约", () => {
     });
   });
 
-  it("拒绝缺少证书指纹或包含正文内容的配对信息", () => {
-    expect(() => parsePairingInfo(JSON.stringify({
+  it("拒绝缺少证书指纹或包含正文内容的配对信息", async () => {
+    await expect(parsePairingInfo(JSON.stringify({
       endpoint: "192.168.1.20:49152",
       secret: "share-secret-value",
       verificationCode: "012345",
       expiresAt: 1_800_000_000,
-    }))).toThrow("配对信息无效");
-    expect(() => parsePairingInfo("不是 JSON")).toThrow("配对信息无效");
-    expect(() => parsePairingInfo(JSON.stringify({
+    }))).rejects.toThrow("配对信息无效");
+    await expect(parsePairingInfo("不是 JSON")).rejects.toThrow("配对信息无效");
+    await expect(parsePairingInfo(JSON.stringify({
       endpoint: "192.168.1.20:49152",
       secret: "share-secret-value",
       fingerprint: "sha256:abc123",
       verificationCode: "012345",
       expiresAt: 1_800_000_000,
       messages: ["会话正文"],
-    }))).toThrow("配对信息无效");
+    }))).rejects.toThrow("配对信息无效");
+  });
+
+  it("拒绝验证码与证书指纹不匹配的配对信息", async () => {
+    await expect(parsePairingInfo(JSON.stringify({
+      endpoint: "192.168.1.20:49152",
+      secret: "share-secret-value",
+      fingerprint: `sha256:${"a".repeat(64)}`,
+      verificationCode: "012345",
+      expiresAt: 1_800_000_000,
+    }))).rejects.toThrow("配对信息无效");
   });
 
   it("列出分享方需要显示的每一种中文状态", () => {

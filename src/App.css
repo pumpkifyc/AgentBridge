@@ -196,6 +196,36 @@ button:focus-visible {
   font-size: 11px;
 }
 
+.receive-page {
+  display: grid;
+  gap: 20px;
+}
+
+.receive-page textarea {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #c7ced7;
+  border-radius: 7px;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.transfer-progress {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 16px;
+  color: #4a5665;
+  font-size: 13px;
+}
+
+.transfer-progress progress {
+  width: 100%;
+  height: 10px;
+  accent-color: #2f5f8f;
+}
+
 .main-nav {
   display: flex;
   gap: 8px;

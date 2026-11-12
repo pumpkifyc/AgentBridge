@@ -47,6 +47,16 @@ pub struct ShareProposal {
     pub chunk_count: u32,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferProgress {
+    pub kind: String,
+    pub transferred_bytes: u64,
+    pub total_bytes: u64,
+}
+
+pub type ProgressCallback = Arc<dyn Fn(TransferProgress) + Send + Sync>;
+
 #[derive(Debug)]
 pub struct TransferClient {
     invitation_id: String,
@@ -54,6 +64,13 @@ pub struct TransferClient {
     reader: BufReader<tokio::io::ReadHalf<tokio_rustls::client::TlsStream<TcpStream>>>,
     writer: tokio::io::WriteHalf<tokio_rustls::client::TlsStream<TcpStream>>,
     proposal: Option<ShareProposal>,
+}
+
+#[derive(Debug)]
+pub struct PendingTransfer {
+    pub client: TransferClient,
+    pub pairing: crate::transfer::protocol::PairingInfo,
+    pub proposal: ShareProposal,
 }
 
 impl TransferClient {
@@ -138,11 +155,17 @@ impl TransferClient {
         }
     }
 
-    pub async fn accept(self) -> Result<SnapshotV1, TransferClientError> {
-        self.complete().await
+    pub async fn accept(
+        self,
+        progress: Option<ProgressCallback>,
+    ) -> Result<(SnapshotV1, Vec<serde_json::Value>), TransferClientError> {
+        self.complete(progress).await
     }
 
-    async fn complete(mut self) -> Result<SnapshotV1, TransferClientError> {
+    async fn complete(
+        mut self,
+        progress: Option<ProgressCallback>,
+    ) -> Result<(SnapshotV1, Vec<serde_json::Value>), TransferClientError> {
         let proposal = self
             .proposal
             .take()
@@ -153,6 +176,18 @@ impl TransferClient {
         )
         .await?;
         let mut bytes = Vec::with_capacity(proposal.total_bytes as usize);
+        let mut progress_events = Vec::new();
+        let mut emit = |transferred_bytes: u64| {
+            let event = TransferProgress {
+                kind: "chunk".into(),
+                transferred_bytes,
+                total_bytes: u64::from(proposal.total_bytes),
+            };
+            if let Some(callback) = &progress {
+                callback(event.clone());
+            }
+            progress_events.push(serde_json::to_value(event).unwrap_or_default());
+        };
         for index in 0..proposal.chunk_count {
             send(
                 &mut self.writer,
@@ -171,6 +206,7 @@ impl TransferClient {
                         return Err(TransferClientError::Protocol("数据块超过大小限制".into()));
                     }
                     bytes.extend_from_slice(&chunk);
+                    emit(bytes.len() as u64);
                 }
                 ServerMessage::Error { code, message } => {
                     return Err(TransferClientError::Rejected(code, message));
@@ -202,7 +238,7 @@ impl TransferClient {
         )
         .await?;
         match receive(&mut self.reader).await? {
-            ServerMessage::Complete => Ok(snapshot),
+            ServerMessage::Complete => Ok((snapshot, progress_events)),
             ServerMessage::Error { code, message } => {
                 Err(TransferClientError::Rejected(code, message))
             }

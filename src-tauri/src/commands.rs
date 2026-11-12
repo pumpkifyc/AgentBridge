@@ -8,11 +8,12 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::{
     collections::HashMap,
+    fs,
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tauri::{State, ipc::Channel};
-use tokio::runtime::{Builder, Runtime};
+use tauri::{Manager, Runtime as TauriRuntime, State, WebviewWindow, ipc::Channel};
+use tokio::{runtime::{Builder, Runtime}, task::AbortHandle};
 
 const MIN_COMPATIBLE_CLI: (u32, u32, u32) = (0, 142, 2);
 const IMPORT_TURN_TIMEOUT: Duration = Duration::from_secs(120);
@@ -59,8 +60,15 @@ impl From<CodexError> for CommandError {
 
 pub struct AppState {
     pub invitations: Arc<InvitationManager>,
-    servers: Mutex<HashMap<String, crate::transfer::TransferServerHandle>>,
+    pub servers: Mutex<HashMap<String, crate::transfer::TransferServerHandle>>,
     snapshots: Mutex<HashMap<String, SnapshotV1>>,
+}
+
+impl AppState {
+    pub fn remove_finished_servers(&self) {
+        let mut servers = self.servers.lock().expect("服务器锁已中毒");
+        servers.retain(|_, handle| !handle.is_stopped());
+    }
 }
 
 impl Default for AppState {
@@ -230,6 +238,7 @@ pub async fn start_share(
 
 #[tauri::command]
 pub fn share_status(state: State<'_, AppState>, invitation_id: String) -> Result<String, CommandError> {
+    state.remove_finished_servers();
     let invitation = state
         .invitations
         .status(&invitation_id)
@@ -274,9 +283,7 @@ pub fn cancel_share(state: State<'_, AppState>, invitation_id: String) -> Result
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewShareRequest {
-    pub endpoint: String,
-    pub secret: String,
-    pub fingerprint: String,
+    pub pairing_info: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -307,8 +314,23 @@ pub struct SnapshotPreviewText {
     pub continuation_prompt: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedSnapshot {
+    pub share_id: String,
+    pub endpoint: String,
+    pub fingerprint: String,
+    pub metadata: crate::transfer::ShareMetadata,
+    pub snapshot_path: String,
+    pub total_bytes: u32,
+    pub chunk_count: u32,
+}
+
 pub struct ReceiveState {
-    pub clients: Mutex<HashMap<String, crate::transfer::TransferClient>>,
+    pub clients: Mutex<HashMap<String, crate::transfer::client::PendingTransfer>>,
+    pub transfers: Mutex<HashMap<String, AbortHandle>>,
+    pub staged: Mutex<HashMap<String, StagedSnapshot>>,
+    pub progress: Mutex<Vec<serde_json::Value>>,
     pub imports: Mutex<Vec<ImportRecord>>,
     pub runtime: Runtime,
 }
@@ -317,6 +339,9 @@ impl Default for ReceiveState {
     fn default() -> Self {
         Self {
             clients: Mutex::new(HashMap::new()),
+            transfers: Mutex::new(HashMap::new()),
+            staged: Mutex::new(HashMap::new()),
+            progress: Mutex::new(Vec::new()),
             imports: Mutex::new(Vec::new()),
             runtime: Builder::new_multi_thread()
                 .worker_threads(2)
@@ -332,9 +357,14 @@ pub async fn preview_share(
     state: State<'_, ReceiveState>,
     request: PreviewShareRequest,
 ) -> Result<ReceivedPreview, CommandError> {
-    let endpoint = request.endpoint.clone();
-    let secret = request.secret.clone();
-    let fingerprint = request.fingerprint.clone();
+    let pairing: crate::transfer::protocol::PairingInfo =
+        serde_json::from_str(&request.pairing_info)
+            .map_err(|error| CommandError::new("invalidPairing", format!("配对信息无效：{error}")))?;
+    validate_received_pairing(&pairing)
+        .map_err(|error| CommandError::new("invalidPairing", error))?;
+    let endpoint = pairing.endpoint.clone();
+    let secret = pairing.secret.clone();
+    let fingerprint = pairing.fingerprint.clone();
     let (client, proposal) = state
         .runtime
         .spawn(async move {
@@ -348,7 +378,14 @@ pub async fn preview_share(
         .clients
         .lock()
         .expect("接收客户端锁已中毒")
-        .insert(share_id.clone(), client);
+        .insert(
+            share_id.clone(),
+            crate::transfer::client::PendingTransfer {
+                client,
+                pairing,
+                proposal: proposal.clone(),
+            },
+        );
     Ok(ReceivedPreview {
         share_id,
         metadata: proposal.metadata,
@@ -359,7 +396,7 @@ pub async fn preview_share(
 
 #[tauri::command]
 pub async fn decline_share(state: State<'_, ReceiveState>, share_id: String) -> Result<(), CommandError> {
-    let client = state
+    let pending = state
         .clients
         .lock()
         .expect("接收客户端锁已中毒")
@@ -367,7 +404,7 @@ pub async fn decline_share(state: State<'_, ReceiveState>, share_id: String) -> 
         .ok_or_else(|| CommandError::new("notFound", "找不到待处理的分享"))?;
     state
         .runtime
-        .spawn(async move { client.decline().await })
+        .spawn(async move { pending.client.decline().await })
         .await
         .map_err(|error| CommandError::new("transferFailed", error.to_string()))?
         .map_err(|error| CommandError::new("transferFailed", error.to_string()))
@@ -375,34 +412,163 @@ pub async fn decline_share(state: State<'_, ReceiveState>, share_id: String) -> 
 
 #[tauri::command]
 pub async fn accept_share(
+    window: WebviewWindow<impl TauriRuntime>,
     state: State<'_, ReceiveState>,
     share_id: String,
-    on_event: Channel<crate::transfer::protocol::ServerMessage>,
-) -> Result<SnapshotV1, CommandError> {
-    let client = state
+    on_event: Channel<crate::transfer::client::TransferProgress>,
+) -> Result<StagedSnapshot, CommandError> {
+    let pending = state
         .clients
         .lock()
         .expect("接收客户端锁已中毒")
         .remove(&share_id)
         .ok_or_else(|| CommandError::new("notFound", "找不到待处理的分享"))?;
-    let _ = on_event.send(crate::transfer::protocol::ServerMessage::Declined);
-    let snapshot = state
+    let pairing = pending.pairing.clone();
+    let proposal = pending.proposal.clone();
+    let progress: crate::transfer::client::ProgressCallback = Arc::new(move |event| {
+        let _ = on_event.send(event);
+    });
+    let task = state
         .runtime
-        .spawn(async move { client.accept().await })
-        .await
+        .spawn(async move { pending.client.accept(Some(progress)).await });
+    state
+        .transfers
+        .lock()
+        .expect("传输任务锁已中毒")
+        .insert(share_id.clone(), task.abort_handle());
+    let result = task.await;
+    let removed = state
+        .transfers
+        .lock()
+        .expect("传输任务锁已中毒")
+        .remove(&share_id);
+    if removed.is_none() {
+        return Err(CommandError::new("cancelled", "下载已取消"));
+    }
+    let (snapshot, progress_events) = result
         .map_err(|error| CommandError::new("transferFailed", error.to_string()))?
         .map_err(|error| CommandError::new("transferFailed", error.to_string()))?;
-    Ok(snapshot)
+    let bytes = serde_json::to_vec(&snapshot)
+        .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
+    validate_snapshot(&bytes)
+        .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
+    let path = staging_path(&window, &share_id)?;
+    fs::write(&path, &bytes)
+        .map_err(|error| CommandError::new("stagingFailed", format!("暂存快照失败：{error}")))?;
+    let staged = StagedSnapshot {
+        share_id: share_id.clone(),
+        endpoint: pairing.endpoint,
+        fingerprint: pairing.fingerprint,
+        metadata: proposal.metadata,
+        snapshot_path: path.to_string_lossy().into_owned(),
+        total_bytes: proposal.total_bytes,
+        chunk_count: proposal.chunk_count,
+    };
+    state
+        .staged
+        .lock()
+        .expect("暂存锁已中毒")
+        .insert(share_id.clone(), staged.clone());
+    state
+        .progress
+        .lock()
+        .expect("进度锁已中毒")
+        .extend(progress_events);
+    Ok(staged)
+}
+
+pub fn validate_received_pairing(
+    pairing: &crate::transfer::protocol::PairingInfo,
+) -> Result<(), String> {
+    const FINGERPRINT_PREFIX: &str = "sha256:";
+    if pairing.endpoint.trim().is_empty()
+        || pairing.secret.trim().is_empty()
+        || pairing.fingerprint.len() != FINGERPRINT_PREFIX.len() + 64
+        || !pairing.fingerprint.starts_with(FINGERPRINT_PREFIX)
+        || !pairing.fingerprint[FINGERPRINT_PREFIX.len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || pairing.verification_code != crate::pairing::invitation::short_code(&pairing.fingerprint)
+    {
+        return Err("配对信息无效，请核对验证码和证书指纹，并从分享方重新复制完整 JSON。".into());
+    }
+    Ok(())
+}
+
+fn staging_path(
+    window: &WebviewWindow<impl TauriRuntime>,
+    share_id: &str,
+) -> Result<std::path::PathBuf, CommandError> {
+    let digest = hex::encode(sha2::Sha256::digest(share_id.as_bytes()));
+    let directory = window
+        .path()
+        .app_data_dir()
+        .map_err(|error| CommandError::new("stagingFailed", format!("无法定位应用数据目录：{error}")))?
+        .join("staged-snapshots");
+    fs::create_dir_all(&directory)
+        .map_err(|error| CommandError::new("stagingFailed", format!("创建暂存目录失败：{error}")))?;
+    Ok(directory.join(format!("{digest}.json")))
 }
 
 #[tauri::command]
 pub fn cancel_transfer(state: State<'_, ReceiveState>, share_id: String) -> Result<(), CommandError> {
+    let task = state
+        .transfers
+        .lock()
+        .expect("传输任务锁已中毒")
+        .remove(&share_id);
+    if let Some(task) = task {
+        task.abort();
+        return Ok(());
+    }
     state
         .clients
         .lock()
         .expect("接收客户端锁已中毒")
         .remove(&share_id)
         .ok_or_else(|| CommandError::new("notFound", "找不到进行中的传输"))?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryPreviewRequest {
+    pub pairing_info: String,
+    pub share_id: String,
+}
+
+#[tauri::command]
+pub async fn retry_preview(
+    state: State<'_, ReceiveState>,
+    request: RetryPreviewRequest,
+) -> Result<ReceivedPreview, CommandError> {
+    state
+        .clients
+        .lock()
+        .expect("接收客户端锁已中毒")
+        .remove(&request.share_id);
+    preview_share(
+        state,
+        PreviewShareRequest {
+            pairing_info: request.pairing_info,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub fn delete_staged_snapshot(
+    state: State<'_, ReceiveState>,
+    share_id: String,
+) -> Result<(), CommandError> {
+    let staged = state
+        .staged
+        .lock()
+        .expect("暂存锁已中毒")
+        .remove(&share_id)
+        .ok_or_else(|| CommandError::new("notFound", "找不到本机暂存快照"))?;
+    fs::remove_file(&staged.snapshot_path)
+        .map_err(|error| CommandError::new("deleteFailed", format!("删除暂存快照失败：{error}")))?;
     Ok(())
 }
 

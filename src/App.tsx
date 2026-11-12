@@ -1,5 +1,6 @@
 import { useState } from "react";
 import "./App.css";
+import { ReceivePage } from "./features/receive/ReceivePage";
 import { SharePage } from "./features/share/SharePage";
 
 type View = "home" | "share" | "receive" | "history";
@@ -40,7 +41,7 @@ function App() {
           </section>
         )}
         {view === "share" && <SharePage />}
-        {view === "receive" && <p className="notice">接收功能将在配对完成后开放。</p>}
+        {view === "receive" && <ReceivePage />}
         {view === "history" && <p className="notice">暂无导入记录。</p>}
       </div>
     </main>

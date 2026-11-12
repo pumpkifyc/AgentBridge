@@ -24,6 +24,8 @@ pub fn run() {
             commands::decline_share,
             commands::accept_share,
             commands::cancel_transfer,
+            commands::retry_preview,
+            commands::delete_staged_snapshot,
             commands::import_snapshot,
             commands::list_imports,
             commands::delete_import,

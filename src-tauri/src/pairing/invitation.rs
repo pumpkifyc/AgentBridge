@@ -99,6 +99,7 @@ impl Invitation {
                     | InvitationState::Paired
                     | InvitationState::Previewed
                     | InvitationState::Transferring
+                    | InvitationState::Failed
             )
     }
 }
@@ -234,6 +235,7 @@ impl InvitationManager {
                 | InvitationState::Paired
                 | InvitationState::Previewed
                 | InvitationState::Transferring
+                | InvitationState::Failed
         ) {
             return Err(InvitationError::Inactive);
         }

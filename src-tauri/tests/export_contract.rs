@@ -119,7 +119,11 @@ fn share_status_reader_reports_terminal_states_without_an_error() {
     }
     assert!(manager
         .get(&invitation.id)
-        .is_err(), "传输认证仍必须拒绝终态邀请");
+        .is_ok(), "失败状态在有效期内仍允许明确重试");
+    manager.set_state(&invitation.id, InvitationState::Accepted);
+    assert!(manager
+        .get(&invitation.id)
+        .is_err(), "传输完成仍必须拒绝重放");
 }
 
 #[test]

@@ -70,7 +70,7 @@ export function buildPairingInfo(session: ShareSession): string {
   return JSON.stringify(info);
 }
 
-export function parsePairingInfo(text: string): PairingInfo {
+export async function parsePairingInfo(text: string): Promise<PairingInfo> {
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -90,5 +90,25 @@ export function parsePairingInfo(text: string): PairingInfo {
     || !/^sha256:[0-9a-f]{64}$/i.test(String(object.fingerprint))) {
     throw new Error("配对信息无效：请从分享方重新复制");
   }
-  return object as unknown as PairingInfo;
+  const info = object as unknown as PairingInfo;
+  if (!await matchesVerificationCode(info.fingerprint, info.verificationCode)) {
+    throw new Error("配对信息无效：请从分享方重新复制");
+  }
+  return info;
+}
+
+async function matchesVerificationCode(
+  fingerprint: string,
+  verificationCode: string,
+): Promise<boolean> {
+  if (!/^\d{6}$/.test(verificationCode)) {
+    return false;
+  }
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(fingerprint),
+  );
+  const bytes = new Uint8Array(digest);
+  const number = ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0;
+  return String(number % 1_000_000).padStart(6, "0") === verificationCode;
 }

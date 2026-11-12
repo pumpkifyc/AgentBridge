@@ -117,7 +117,7 @@ describe("分享方配对面板", () => {
       "失败",
     ]) {
       await act(async () => {
-        vi.advanceTimersByTime(1500);
+        await vi.advanceTimersByTimeAsync(1500);
       });
       await waitFor(() => expect(screen.getByText(state)).toBeInTheDocument());
     }
@@ -131,8 +131,9 @@ describe("分享方配对面板", () => {
     await waitFor(() => expect(screen.getByText("192.168.1.20:49152")).toBeInTheDocument());
 
     await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
       vi.setSystemTime((nowSeconds + 301) * 1000);
-      vi.advanceTimersByTime(1500);
+      await vi.advanceTimersByTimeAsync(1500);
     });
 
     await waitFor(() => expect(screen.getByText("已过期")).toBeInTheDocument());
@@ -186,7 +187,7 @@ describe("分享方配对面板", () => {
 
     mockTauri("share_status", { invitationId: "invitation-2" }, new Error("secret=share-secret-value"), true);
     await act(async () => {
-      vi.advanceTimersByTime(1500);
+      await vi.advanceTimersByTimeAsync(1500);
     });
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("无法读取分享状态，可重新创建邀请"));
     expect(screen.queryByText("share-secret-value")).not.toBeInTheDocument();
@@ -208,7 +209,7 @@ describe("分享方配对面板", () => {
 
     rerender(<PairingPanel threadId="thread-2" previewReady={false} />);
     await act(async () => {
-      vi.advanceTimersByTime(4500);
+      await vi.advanceTimersByTimeAsync(4500);
     });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });

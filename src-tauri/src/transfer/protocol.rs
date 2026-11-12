@@ -128,6 +128,16 @@ pub struct ShareMetadata {
     pub schema_version: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingInfo {
+    pub endpoint: String,
+    pub secret: String,
+    pub fingerprint: String,
+    pub verification_code: String,
+    pub expires_at: i64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorCode {

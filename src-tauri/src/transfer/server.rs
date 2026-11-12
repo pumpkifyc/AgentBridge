@@ -30,6 +30,7 @@ pub struct TransferServerHandle {
     shutdown: std::sync::Mutex<Option<oneshot::Sender<()>>>,
     stopped: Arc<AtomicBool>,
     fingerprint: String,
+    certificate: Arc<AtomicBool>,
 }
 
 impl TransferServerHandle {
@@ -38,10 +39,17 @@ impl TransferServerHandle {
         if let Some(shutdown) = self.shutdown.lock().expect("关闭锁已中毒").take() {
             let _ = shutdown.send(());
         }
+        self.release_certificate();
     }
 
     pub fn is_stopped(&self) -> bool {
         self.stopped.load(Ordering::SeqCst)
+    }
+
+    fn release_certificate(&self) {
+        if self.certificate.swap(false, Ordering::SeqCst) {
+            remove_certificate(&self.fingerprint);
+        }
     }
 }
 
@@ -51,7 +59,7 @@ impl Drop for TransferServerHandle {
         if let Some(shutdown) = self.shutdown.lock().expect("关闭锁已中毒").take() {
             let _ = shutdown.send(());
         }
-        remove_certificate(&self.fingerprint);
+        self.release_certificate();
     }
 }
 
@@ -109,13 +117,13 @@ impl TransferServer {
             .local_addr()
             .map_err(|error| TransferServerError::Bind(error.to_string()))?;
 
-        let certificate = certificate_for(&invitation.fingerprint)
+        let temporary_certificate = certificate_for(&invitation.fingerprint)
             .ok_or(TransferServerError::MissingCertificate)?;
         let config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(
-                vec![CertificateDer::from(certificate.certificate_der)],
-                PrivateKeyDer::try_from(certificate.private_key_der)
+                vec![CertificateDer::from(temporary_certificate.certificate_der)],
+                PrivateKeyDer::try_from(temporary_certificate.private_key_der)
                     .map_err(|error| TransferServerError::Tls(error.to_string()))?,
             )
             .map_err(|error| TransferServerError::Tls(error.to_string()))?;
@@ -129,10 +137,12 @@ impl TransferServer {
         let consumed = Arc::new(AtomicBool::new(false));
         let lease = Arc::new(Mutex::new(TransferLease::default()));
         let stopped = Arc::new(AtomicBool::new(false));
+        let certificate = Arc::new(AtomicBool::new(true));
         let active_transfers = Arc::new(Mutex::new(Vec::<tokio::task::AbortHandle>::new()));
         let (shutdown, mut shutdown_rx) = oneshot::channel();
-        let certificate_fingerprint = invitation.fingerprint.clone();
-        let handle_fingerprint = certificate_fingerprint.clone();
+        let handle_fingerprint = invitation.fingerprint.clone();
+        let fingerprint_for_task = handle_fingerprint.clone();
+        let certificate_in_task = Arc::clone(&certificate);
         let expires_in = Duration::from_millis(
             u64::try_from(
                 invitation
@@ -145,25 +155,32 @@ impl TransferServer {
         );
 
         let stopped_in_task = Arc::clone(&stopped);
+        let invitation_id = invitation.id.clone();
+        let expiry_manager = Arc::clone(&manager);
         tokio::spawn(async move {
             let stopped = stopped_in_task;
+            let certificate = certificate_in_task;
             let mut expiry = tokio::time::interval(expires_in);
             expiry.tick().await;
             loop {
                 tokio::select! {
+                    biased;
                     _ = &mut shutdown_rx => {
                         stopped.store(true, Ordering::SeqCst);
+                        drop(listener);
                         break;
                     }
                     _ = expiry.tick() => {
                         stopped.store(true, Ordering::SeqCst);
                         if !consumed.load(Ordering::SeqCst)
-                            && manager.get(&invitation.id).is_ok()
+                            && expiry_manager.get(&invitation_id).is_ok()
                         {
-                            manager.set_state(&invitation.id, InvitationState::Expired);
+                            expiry_manager.set_state(&invitation_id, InvitationState::Expired);
                         }
                         drop(listener);
-                        remove_certificate(&certificate_fingerprint);
+                        if certificate.swap(false, Ordering::SeqCst) {
+                            remove_certificate(&fingerprint_for_task);
+                        }
                         break;
                     }
                     accepted = listener.accept() => {
@@ -178,10 +195,30 @@ impl TransferServer {
                         let metadata = metadata.clone();
                         let failed_auths = failed_auths.clone();
                         let consumed = consumed.clone();
+                        let completion_flag = Arc::clone(&consumed);
                         let lease = Arc::clone(&lease);
                         let stopped = Arc::clone(&stopped);
+                        let stopped_by_transfer = Arc::clone(&stopped);
+                        let certificate_for_transfer = Arc::clone(&certificate);
+                        let fingerprint_for_transfer = fingerprint_for_task.clone();
                         let task = tokio::spawn(async move {
                             if stopped.load(Ordering::SeqCst) {
+                                return;
+                            }
+                            if completion_flag.load(Ordering::SeqCst) {
+                                let tls = match acceptor.accept(stream).await {
+                                    Ok(stream) => stream,
+                                    Err(_) => return,
+                                };
+                                let (_, mut writer) = tokio::io::split(tls);
+                                let _ = send(
+                                    &mut writer,
+                                    &ServerMessage::Error {
+                                        code: ErrorCode::Unauthorized,
+                                        message: "邀请凭据已使用".into(),
+                                    },
+                                )
+                                .await;
                                 return;
                             }
                             let tls = match acceptor.accept(stream).await {
@@ -210,6 +247,12 @@ impl TransferServer {
                                 consumed,
                             ).await;
                             lease.lock().expect("传输租约锁已中毒").release();
+                            if completion_flag.load(Ordering::SeqCst) {
+                                stopped_by_transfer.store(true, Ordering::SeqCst);
+                                if certificate_for_transfer.swap(false, Ordering::SeqCst) {
+                                    remove_certificate(&fingerprint_for_transfer);
+                                }
+                            }
                         });
                         active_transfers
                             .lock()
@@ -232,6 +275,7 @@ impl TransferServer {
             shutdown: Mutex::new(Some(shutdown)),
             stopped,
             fingerprint: handle_fingerprint,
+            certificate,
         })
     }
 }
@@ -249,6 +293,7 @@ async fn handle_connection(
     let mut reader = BufReader::new(reader);
     let mut line = String::new();
     if reader.read_line(&mut line).await.is_err() {
+        fail_interrupted(&manager, &invitation.id);
         return Ok(());
     }
     let hello: ClientMessage = match serde_json::from_str(&line) {
@@ -330,6 +375,7 @@ async fn handle_connection(
 
     line.clear();
     if reader.read_line(&mut line).await.is_err() {
+        fail_interrupted(&manager, &invitation.id);
         return Ok(());
     }
     match serde_json::from_str::<ClientMessage>(&line) {
@@ -354,7 +400,6 @@ async fn handle_connection(
         }
         _ => {
             manager.set_state(&invitation.id, InvitationState::Failed);
-            consumed.store(true, Ordering::SeqCst);
             let _ = send(
                 &mut writer,
                 &ServerMessage::Error {
@@ -369,6 +414,7 @@ async fn handle_connection(
 
     line.clear();
     if reader.read_line(&mut line).await.is_err() {
+        fail_interrupted(&manager, &invitation.id);
         return Ok(());
     }
     let approved = matches!(
@@ -386,12 +432,12 @@ async fn handle_connection(
     for (index, chunk) in bytes.chunks(MAX_CHUNK_BYTES).enumerate() {
         line.clear();
         if reader.read_line(&mut line).await.is_err() {
+            fail_interrupted(&manager, &invitation.id);
             return Ok(());
         }
         let ack = serde_json::from_str::<ClientMessage>(&line);
         if !matches!(ack, Ok(ClientMessage::ChunkAck { index: ack_index }) if ack_index as usize == index) {
             manager.set_state(&invitation.id, InvitationState::Failed);
-            consumed.store(true, Ordering::SeqCst);
             let _ = send(
                 &mut writer,
                 &ServerMessage::Error {
@@ -408,7 +454,6 @@ async fn handle_connection(
         };
         if send(&mut writer, &message).await.is_err() {
             manager.set_state(&invitation.id, InvitationState::Failed);
-            consumed.store(true, Ordering::SeqCst);
             return Ok(());
         }
     }
@@ -421,6 +466,7 @@ async fn handle_connection(
     .await;
     line.clear();
     if reader.read_line(&mut line).await.is_err() {
+        manager.set_state(&invitation.id, InvitationState::Failed);
         return Ok(());
     }
     if matches!(
@@ -429,10 +475,10 @@ async fn handle_connection(
     ) {
         let _ = send(&mut writer, &ServerMessage::Complete).await;
         manager.set_state(&invitation.id, InvitationState::Accepted);
+        consumed.store(true, Ordering::SeqCst);
     } else {
         manager.set_state(&invitation.id, InvitationState::Failed);
     }
-    consumed.store(true, Ordering::SeqCst);
     Ok(())
 }
 
@@ -444,6 +490,12 @@ async fn send<W: AsyncWriteExt + Unpin>(
     writer.write_all(&value).await?;
     writer.write_all(b"\n").await?;
     writer.flush().await
+}
+
+fn fail_interrupted(manager: &InvitationManager, invitation_id: &str) {
+    if manager.get(invitation_id).is_ok() {
+        manager.set_state(invitation_id, InvitationState::Failed);
+    }
 }
 
 #[allow(dead_code)]
