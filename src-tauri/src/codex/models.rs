@@ -14,6 +14,7 @@ pub struct ThreadSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct Page<T> {
     pub data: Vec<T>,
     pub next_cursor: Option<String>,

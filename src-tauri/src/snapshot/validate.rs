@@ -31,9 +31,9 @@ pub fn validate_snapshot(bytes: &[u8]) -> Result<SnapshotV1, SnapshotError> {
     let value: serde_json::Value = serde_json::from_slice(bytes)
         .map_err(|error| SnapshotError::Malformed(error.to_string()))?;
     let version = value
-        .get("schema_version")
+        .get("schemaVersion")
         .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| SnapshotError::Malformed("缺少 schema_version".into()))?;
+        .ok_or_else(|| SnapshotError::Malformed("缺少 schemaVersion".into()))?;
     if version != 1 {
         return Err(SnapshotError::UnsupportedVersion(version));
     }

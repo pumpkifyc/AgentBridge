@@ -8,6 +8,7 @@ pub enum MessageRole {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct SnapshotMetadata {
     pub source_thread_id: String,
     pub title: String,
@@ -20,6 +21,7 @@ pub struct SnapshotMetadata {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct SnapshotMessage {
     pub role: MessageRole,
     pub text: String,
@@ -29,6 +31,7 @@ pub struct SnapshotMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct SnapshotV1 {
     pub schema_version: u32,
     pub metadata: SnapshotMetadata,

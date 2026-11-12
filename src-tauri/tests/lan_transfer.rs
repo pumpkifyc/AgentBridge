@@ -296,7 +296,7 @@ async fn cancelled_or_stopped_server_is_unavailable() {
 }
 
 #[tokio::test]
-async fn interruption_does_not_mark_a_share_as_accepted() {
+async fn interrupted_preview_can_retry_the_same_still_valid_invitation() {
     let manager = Arc::new(InvitationManager::new());
     let (invitation, handle) = start_server(&manager, 60).await;
     let (client, _) = TransferClient::preview(
@@ -306,23 +306,75 @@ async fn interruption_does_not_mark_a_share_as_accepted() {
     )
     .await
     .expect("应完成预览");
-    handle.stop();
-    let error = client
-        .accept()
-        .await
-        .expect_err("中断的连接不能标记为已导入");
+    drop(client);
+    sleep(Duration::from_millis(30)).await;
+    assert_ne!(
+        manager.status(&invitation.id),
+        Ok(InvitationState::Accepted)
+    );
+
+    let (retry, _) = TransferClient::preview(
+        &invitation.endpoint,
+        &invitation.secret,
+        &invitation.fingerprint,
+    )
+    .await
+    .expect("预览连接中断后应允许同一邀请重试");
+    let received = retry.accept().await.expect("重试应完成校验后的快照传输");
+    assert_eq!(received, snapshot());
+    sleep(Duration::from_millis(30)).await;
+    assert_eq!(
+        manager.status(&invitation.id),
+        Ok(InvitationState::Accepted)
+    );
     assert!(matches!(
-        error,
-        TransferClientError::Interrupted
-            | TransferClientError::Connection(_)
-            | TransferClientError::Protocol(_)
-            | TransferClientError::Rejected(_, _)
+        manager.get(&invitation.id),
+        Err(agentbridge_lib::pairing::InvitationError::Inactive)
     ));
-    let state = manager
-        .get(&invitation.id)
-        .expect("中断后邀请仍可查询")
-        .state;
-    assert_ne!(state, InvitationState::Accepted);
+    handle.stop();
+}
+
+#[tokio::test]
+async fn a_successful_transfer_consumes_the_invitation_but_a_failed_one_does_not() {
+    let manager = Arc::new(InvitationManager::new());
+    let (invitation, handle) = start_server(&manager, 60).await;
+    handle.stop();
+    let error = TransferClient::preview(
+        &invitation.endpoint,
+        &invitation.secret,
+        &invitation.fingerprint,
+    )
+    .await
+    .expect_err("已停止的服务器无法连接");
+    assert!(matches!(error, TransferClientError::Connection(_)));
+    assert_eq!(
+        manager.status(&invitation.id),
+        Ok(InvitationState::Waiting)
+    );
+
+    let (second, second_handle) = start_server(&manager, 60).await;
+    let (client, _) = TransferClient::preview(
+        &second.endpoint,
+        &second.secret,
+        &second.fingerprint,
+    )
+    .await
+    .expect("应完成预览");
+    client.accept().await.expect("应完成传输");
+    sleep(Duration::from_millis(30)).await;
+    let replay = TransferClient::preview(
+        &second.endpoint,
+        &second.secret,
+        &second.fingerprint,
+    )
+    .await
+    .expect_err("成功传输后的凭据不能重放");
+    assert!(matches!(replay, TransferClientError::Rejected(_, _)));
+    assert_eq!(
+        manager.status(&second.id),
+        Ok(InvitationState::Accepted)
+    );
+    second_handle.stop();
 }
 
 #[tokio::test]

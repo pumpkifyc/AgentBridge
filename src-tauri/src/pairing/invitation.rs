@@ -36,6 +36,7 @@ pub enum InvitationState {
     Previewed,
     Transferring,
     Accepted,
+    Imported,
     Declined,
     Expired,
     Revoked,
@@ -50,7 +51,8 @@ impl InvitationState {
             Self::Paired => "已配对",
             Self::Previewed => "预览中",
             Self::Transferring => "传输中",
-            Self::Accepted => "已导入",
+            Self::Accepted => "传输完成",
+            Self::Imported => "已导入",
             Self::Declined => "已拒绝",
             Self::Expired => "已过期",
             Self::Revoked => "已撤销",
@@ -191,6 +193,23 @@ impl InvitationManager {
             return Err(InvitationError::Inactive);
         }
         Ok(invitation)
+    }
+
+    pub fn status(&self, invitation_id: &str) -> Result<InvitationState, InvitationError> {
+        let mut invitations = self.invitations.lock().expect("邀请锁已中毒");
+        let invitation = invitations
+            .get_mut(invitation_id)
+            .ok_or(InvitationError::NotFound)?;
+        if invitation.is_expired(unix_seconds())
+            && invitation.state != InvitationState::Imported
+            && invitation.state != InvitationState::Declined
+            && invitation.state != InvitationState::Revoked
+            && invitation.state != InvitationState::Cancelled
+            && invitation.state != InvitationState::Accepted
+        {
+            invitation.state = InvitationState::Expired;
+        }
+        Ok(invitation.state)
     }
 
     pub fn set_state(&self, invitation_id: &str, state: InvitationState) {

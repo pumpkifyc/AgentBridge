@@ -201,7 +201,7 @@ fn validates_and_round_trips_a_valid_snapshot() {
 
 #[test]
 fn rejects_unknown_version_and_malformed_json() {
-    let unknown = br#"{"schema_version":2,"metadata":{},"messages":[],"warnings":[]}"#;
+    let unknown = br#"{"schemaVersion":2,"metadata":{},"messages":[],"warnings":[]}"#;
     assert!(matches!(
         validate_snapshot(unknown),
         Err(SnapshotError::UnsupportedVersion(2))

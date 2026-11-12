@@ -61,6 +61,14 @@ pub fn certificate_for(fingerprint: &str) -> Option<EphemeralCertificate> {
         .cloned()
 }
 
+pub fn remove_certificate(fingerprint: &str) {
+    if let Some(certificates) = CERTIFICATES.get()
+        && let Ok(mut certificates) = certificates.lock()
+    {
+        certificates.remove(fingerprint);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ClientMessage {

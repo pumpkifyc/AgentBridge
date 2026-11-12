@@ -101,10 +101,10 @@ e2e/                         打包应用的跨平台验收检查
 - `CodexClient::read_snapshot(thread_id: &str, cutoff_turn_id: Option<&str>) -> Result<SnapshotV1, CodexError>` 分页读取 turns/items，并调用任务 2 的转换逻辑。
 - Codex 子进程生命周期由 client 管理；stdout 仅用于 JSON-RPC，stderr 仅保存有大小上限的诊断信息。
 
-- [ ] 创建伪造的换行分隔 JSON-RPC App Server 测试程序，覆盖握手、分页、找不到可执行文件、协议错误和进程退出。
-- [ ] 实现请求 ID 关联、分页、超时、取消和结构化错误映射。
-- [ ] 验证启动 Codex 时不使用 shell 字符串插值。
-- [ ] 运行 `cargo test --manifest-path src-tauri/Cargo.toml codex`，并在本机 Codex 安装上手动读取会话。
+- [x] 创建伪造的换行分隔 JSON-RPC App Server 测试程序，覆盖握手、分页、找不到可执行文件、协议错误和进程退出。
+- [x] 实现请求 ID 关联、分页、超时、取消和结构化错误映射。
+- [x] 验证启动 Codex 时不使用 shell 字符串插值。
+- [ ] 运行 `cargo test --manifest-path src-tauri/Cargo.toml codex`，并在本机 Codex 安装上手动读取会话；伪造 App Server 测试已通过，本机版本匹配后的手动验证待发布前完成。
 
 ## Task 4：实现分享方会话选择和预览
 
@@ -122,9 +122,9 @@ e2e/                         打包应用的跨平台验收检查
 - 界面状态：加载中、可用、空列表、不支持、出错。
 - `ConversationPreview` 显示源标题、项目名称/路径元数据、选择的截止轮次、消息顺序和警告；路径需明确标注为说明信息。
 
-- [ ] 测试加载状态、空列表、会话选择、截止轮次选择、预览警告和 Codex 不可用错误。
-- [ ] 实现带类型的 Tauri 命令调用与会话预览，不暴露原始工具参数。
-- [ ] 运行 `npm test -- --run src/features/share/SharePage.test.tsx` 和 `npm run build`。
+- [x] 测试加载状态、空列表、会话选择、截止轮次选择、预览警告和 Codex 不可用错误。
+- [x] 实现带类型的 Tauri 命令调用与会话预览，不暴露原始工具参数。
+- [x] 运行 `npm test -- --run src/features/share/SharePage.test.tsx` 和 `npm run build`。
 
 ## Task 5：实现局域网邀请和加密传输
 
@@ -144,10 +144,10 @@ e2e/                         打包应用的跨平台验收检查
 - `TransferServer::serve(invitation, snapshot)` 仅绑定到选择的局域网接口，使用 rustls 和临时自签名服务端证书（由邀请信息中的指纹固定验证），通过 TLS 承载一次性 Bearer 凭据认证，对失败认证限速，在内容传输前等待接收方批准，并发送有大小限制的数据块及最终 SHA-256 摘要。
 - `TransferClient::preview(endpoint, invitation_secret) -> ShareMetadata` 只返回分享方/项目/快照元数据；`accept()` 下载并校验快照。
 
-- [ ] 编写 loopback 集成测试，覆盖证书指纹固定验证、有效配对、元数据预览、接收方拒绝/接受、重放、过期、撤销、凭据错误、限速、摘要损坏和连接中断。
-- [ ] 使用 `rustls` 和维护中的异步网络库实现有版本号的传输协议；256-bit 邀请凭据必须由操作系统 CSPRNG 生成，禁止自行实现密码学原语。
-- [ ] 只绑定到所选局域网接口，并提供明确的取消/过期状态转换。
-- [ ] 运行 `cargo test --manifest-path src-tauri/Cargo.toml lan_transfer`。
+- [x] 编写 loopback 集成测试，覆盖证书指纹固定验证、有效配对、元数据预览、接收方拒绝/接受、重放、过期、撤销、凭据错误、限速、摘要损坏和连接中断。
+- [x] 使用 `rustls` 和维护中的异步网络库实现有版本号的传输协议；256-bit 邀请凭据必须由操作系统 CSPRNG 生成，禁止自行实现密码学原语。
+- [x] 只绑定到所选局域网接口，并提供明确的取消/过期状态转换。
+- [x] 运行 `cargo test --manifest-path src-tauri/Cargo.toml lan_transfer`。
 
 ## Task 6：构建配对与分享方界面
 
@@ -162,10 +162,10 @@ e2e/                         打包应用的跨平台验收检查
 - Tauri 命令：`start_share(snapshot)`、`revoke_share(invitation_id)`、`share_status(invitation_id)`、`cancel_share(invitation_id)`。
 - 分享方状态：等待、已配对、预览中、传输中、已导入、已过期、已取消、失败。
 
-- [ ] 测试所有状态转换、取消、过期显示和可重试的传输错误。
-- [ ] 实现创建分享、显示连接地址/二维码或手动连接信息、显示验证码及立即撤销控制。
-- [ ] 确认前端日志和错误信息中不包含邀请凭据或会话正文。
-- [ ] 运行分享方界面测试和 `npm run build`。
+- [x] 测试所有状态转换、取消、过期显示和可重试的传输错误。
+- [x] 实现创建分享、显示连接地址/二维码或手动连接信息、显示验证码及立即撤销控制。
+- [x] 确认前端日志和错误信息中不包含邀请凭据或会话正文。
+- [x] 运行分享方界面测试和 `npm run build`。
 
 ## Task 7：接收、预览并批准分享快照
 

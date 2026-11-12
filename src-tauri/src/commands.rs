@@ -169,6 +169,7 @@ pub struct ShareSession {
     pub id: String,
     pub endpoint: String,
     pub secret: String,
+    pub fingerprint: String,
     pub verification_code: String,
     pub expires_at: i64,
     pub state: String,
@@ -220,6 +221,7 @@ pub async fn start_share(
         id: invitation.id,
         endpoint,
         secret: invitation.secret,
+        fingerprint: invitation.fingerprint,
         verification_code: invitation.verification_code,
         expires_at: invitation.expires_at,
         state: InvitationState::Waiting.display_name().into(),
@@ -230,9 +232,9 @@ pub async fn start_share(
 pub fn share_status(state: State<'_, AppState>, invitation_id: String) -> Result<String, CommandError> {
     let invitation = state
         .invitations
-        .get(&invitation_id)
+        .status(&invitation_id)
         .map_err(|error| CommandError::new("inactiveInvitation", error.to_string()))?;
-    Ok(invitation.state.display_name().to_owned())
+    Ok(invitation.display_name().to_owned())
 }
 
 #[tauri::command]

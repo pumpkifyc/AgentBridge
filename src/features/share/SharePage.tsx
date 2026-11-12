@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ConversationPreview } from "./ConversationPreview";
+import { PairingPanel } from "./PairingPanel";
 import { ThreadPicker } from "./ThreadPicker";
 import { shareApi } from "./shareApi";
 import type {
@@ -170,7 +171,13 @@ export function SharePage() {
         onSelectThread={handleSelectThread}
         onSelectTurn={setSelectedTurnId}
       />
-      <ConversationPreview snapshot={snapshot} loading={previewLoading} error={previewError} />
+      <div className="share-detail-column">
+        <ConversationPreview snapshot={snapshot} loading={previewLoading} error={previewError} />
+        <PairingPanel
+          threadId={selectedThreadId}
+          previewReady={snapshot !== null && !previewLoading && !previewError}
+        />
+      </div>
     </div>
   );
 }

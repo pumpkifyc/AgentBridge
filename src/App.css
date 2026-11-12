@@ -118,6 +118,84 @@ button:focus-visible {
   }
 }
 
+.share-detail-column {
+  display: grid;
+  gap: 20px;
+}
+
+.pairing-panel input,
+.pairing-panel textarea {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #c7ced7;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.pairing-panel textarea {
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.pairing-qr {
+  display: block;
+  width: 168px;
+  height: 168px;
+  margin: 12px 0;
+  border: 1px solid #dfe3e8;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.hint {
+  margin: 8px 0 16px;
+  color: #68727f;
+  font-size: 12px;
+}
+
+.share-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.share-status .notice {
+  margin: 0;
+  padding: 6px 10px;
+}
+
+.status-busy {
+  color: #68727f;
+  font-size: 12px;
+}
+
+.status-badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: #2f5f8f;
+  background: #eef5fc;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status-badge.alert {
+  color: #873333;
+  background: #fff0f0;
+}
+
+.verification-code {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.fingerprint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
 .main-nav {
   display: flex;
   gap: 8px;
