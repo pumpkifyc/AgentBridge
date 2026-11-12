@@ -33,6 +33,7 @@ pub struct CodexClient {
     next_id: u64,
     timeout: Duration,
     diagnostics: Arc<Mutex<Vec<u8>>>,
+    cancelled: bool,
 }
 
 impl CodexClient {
@@ -129,6 +130,7 @@ impl CodexClient {
             next_id: 1,
             timeout,
             diagnostics,
+            cancelled: false,
         };
         client.request(
             "initialize",
@@ -163,6 +165,9 @@ impl CodexClient {
     }
 
     fn request(&mut self, method: &str, params: Value) -> Result<Value, CodexError> {
+        if self.cancelled {
+            return Err(CodexError::ProcessExited);
+        }
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         let request = serde_json::to_value(RpcRequest { id, method, params })
@@ -202,7 +207,8 @@ impl CodexClient {
     }
 
     pub fn cancel(&mut self) {
-        let _ = self.child.kill();
+        self.cancelled = true;
+        terminate_process_tree(&mut self.child);
     }
 
     pub fn drain_notifications(&self) -> usize {
@@ -411,9 +417,21 @@ impl CodexClient {
 
 impl Drop for CodexClient {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        terminate_process_tree(&mut self.child);
     }
+}
+
+fn terminate_process_tree(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn convert_item(item: ThreadItem, timestamp: Option<i64>) -> Vec<CodexItem> {
