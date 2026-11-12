@@ -426,9 +426,10 @@ fn terminate_process_tree(child: &mut Child) {
     {
         let _ = Command::new("taskkill")
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status();
+            .spawn();
     }
     let _ = child.kill();
     let _ = child.wait();
