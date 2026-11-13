@@ -100,6 +100,22 @@ describe("分享方配对面板", () => {
     internals.invoke = originalInvoke;
   });
 
+  it("显示检测到的网卡名称并允许切换到实际局域网地址", async () => {
+    mockTauri("list_local_addresses", {}, [
+      { ip: "192.168.1.20", name: "Wi-Fi" },
+      { ip: "172.21.192.1", name: "vEthernet (WSL)" },
+    ]);
+    render(<PairingPanel threadId="thread-1" previewId="preview-1" previewReady />);
+
+    const picker = await screen.findByLabelText("选择检测到的网卡");
+    expect(picker).toHaveTextContent("Wi-Fi · 192.168.1.20");
+    expect(picker).toHaveTextContent("vEthernet (WSL) · 172.21.192.1");
+
+    fireEvent.change(picker, { target: { value: "172.21.192.1" } });
+    expect(screen.getByLabelText("本机局域网地址")).toHaveValue("172.21.192.1");
+    expect(screen.getByText(/可能是虚拟网卡/)).toBeInTheDocument();
+  });
+
   it("创建邀请后显示地址、验证码、指纹和含凭据的二维码", async () => {
     mockStart();
     mockPolling("等待配对");

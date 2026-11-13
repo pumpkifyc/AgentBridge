@@ -8,6 +8,7 @@ import type {
   TransferProgress as Progress,
 } from "./receiveTypes";
 import { parsePairingInfo } from "../share/pairingApi";
+import { describeError } from "../share/shareErrors";
 import { ImportReview } from "../import/ImportReview";
 
 type State =
@@ -70,8 +71,14 @@ export function ReceivePage() {
         ? await receiveApi.retryPreview(pairingText, retryShareId)
         : await receiveApi.preview(pairingText);
       setState({ kind: "approval", preview: result });
-    } catch {
-      setState({ kind: "error", message: "无法连接分享方，请检查地址、证书指纹和邀请是否仍然有效。" });
+    } catch (error) {
+      const detail = describeError(error);
+      setState({
+        kind: "error",
+        message: detail.includes("超时")
+          ? "连接分享方超时。请让分享方选择 Wi-Fi 或 Ethernet 地址，并确认 Windows 防火墙允许 AgentBridge 接收入站连接。"
+          : "无法连接分享方，请检查地址、证书指纹和邀请是否仍然有效。",
+      });
     }
   }
 

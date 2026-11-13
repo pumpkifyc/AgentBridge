@@ -46,5 +46,6 @@ pub mod commands;
 pub mod db;
 pub mod imports;
 pub mod pairing;
+pub mod process;
 pub mod snapshot;
 pub mod transfer;

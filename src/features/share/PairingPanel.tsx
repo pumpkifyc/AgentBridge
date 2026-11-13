@@ -21,6 +21,25 @@ const ACTIVE_STATES: ShareState[] = [
   "失败",
 ];
 
+function isLikelyVirtualInterface(name: string): boolean {
+  return [
+    "vethernet",
+    "virtual",
+    "vmware",
+    "virtualbox",
+    "vbox",
+    "hyper-v",
+    "docker",
+    "wsl",
+    "tailscale",
+    "zerotier",
+    "npcap",
+    "tap-",
+    "tun",
+    "utun",
+  ].some((marker) => name.toLowerCase().includes(marker));
+}
+
 export function PairingPanel({ threadId, previewId, previewReady }: Props) {
   const [session, setSession] = useState<ShareSession | null>(null);
   const [state, setState] = useState<ShareState | null>(null);
@@ -184,6 +203,7 @@ export function PairingPanel({ threadId, previewId, previewReady }: Props) {
   }
 
   const activeSession = session !== null && ACTIVE_STATES.includes(state ?? "等待配对");
+  const selectedAddress = localAddresses.find((address) => address.ip === bindIp);
 
   return (
     <section className="panel pairing-panel" aria-labelledby="pairing-title">
@@ -199,11 +219,34 @@ export function PairingPanel({ threadId, previewId, previewReady }: Props) {
         placeholder="例如 192.168.1.20"
         disabled={busy || activeSession}
       />
+      {localAddresses.length > 0 && (
+        <>
+          <label className="field-label" htmlFor="bind-ip-picker">选择检测到的网卡</label>
+          <select
+            id="bind-ip-picker"
+            value={localAddresses.some((address) => address.ip === bindIp) ? bindIp : ""}
+            onChange={(event) => setBindIp(event.target.value)}
+            disabled={busy || activeSession}
+          >
+            <option value="">手动输入地址</option>
+            {localAddresses.map((address) => (
+              <option key={`${address.name}-${address.ip}`} value={address.ip}>
+                {address.name} · {address.ip}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
       <p className="hint">
         {localAddresses.some((address) => !address.ip.startsWith("127."))
-          ? `已检测到 ${localAddresses.length} 个本机地址，当前优先使用局域网地址。`
+          ? `已检测到 ${localAddresses.length} 个本机地址，优先使用 Wi-Fi 或 Ethernet。`
           : "未检测到局域网地址；127.0.0.1 仅用于本机测试，同事无法连接。"}
       </p>
+      {selectedAddress && isLikelyVirtualInterface(selectedAddress.name) && (
+        <p className="hint warning-text">
+          {selectedAddress.name} 可能是虚拟网卡，同事通常无法连接。请优先选择 Wi-Fi 或 Ethernet。
+        </p>
+      )}
       {addressError && <p className="hint warning-text">{addressError}</p>}
       {!previewReady && (
         <p className="hint" id="preview-gate-hint">生成分享预览后才能创建邀请。</p>

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { StagedSnapshot } from "../receive/receiveTypes";
+import { describeError } from "../share/shareErrors";
 import { ProjectPicker } from "./ProjectPicker";
 import { importApi } from "./importApi";
 import type { ImportRecord } from "./importTypes";
@@ -56,8 +57,8 @@ export function ImportReview({ staged, onImported }: Props) {
       });
       setRecord(imported);
       onImported?.(imported);
-    } catch {
-      setError(IMPORT_FAILURE);
+    } catch (importError) {
+      setError(`${IMPORT_FAILURE} 详细原因：${describeError(importError)}`);
       setRecord(null);
     } finally {
       setBusy(false);
