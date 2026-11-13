@@ -391,9 +391,11 @@ mod tests {
         let home = temp.0.join("home");
         let npm_bin = home.join(".npm-global").join("bin");
         let local_bin = home.join(".local").join("bin");
+        let system_bin = temp.0.join("system-bin");
         fs::create_dir_all(&npm_bin).expect("创建 npm 目录");
         fs::create_dir_all(&local_bin).expect("创建本地工具目录");
-        let existing = env::join_paths([Path::new("/usr/bin"), Path::new("/bin")])
+        fs::create_dir_all(&system_bin).expect("创建系统工具目录");
+        let existing = env::join_paths([&system_bin])
             .expect("构造测试 PATH");
 
         let path = codex_command_path(Some(existing), Some(home)).expect("应构造子进程 PATH");
@@ -401,7 +403,7 @@ mod tests {
 
         assert!(directories.contains(&local_bin));
         assert!(directories.contains(&npm_bin));
-        assert!(directories.contains(&PathBuf::from("/usr/bin")));
+        assert!(directories.contains(&system_bin));
     }
 
     #[test]
