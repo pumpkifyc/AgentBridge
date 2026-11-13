@@ -162,9 +162,7 @@ pub fn convert_codex_items(
                         ));
                     }
                     CodexItem::Unsupported { kind } => {
-                        warnings.add(format!(
-                            "预览中 {kind} 已折叠；原生分享包仍完整保留"
-                        ))
+                        warnings.add(format!("预览中 {kind} 已折叠；原生分享包仍完整保留"))
                     }
                 }
             }
@@ -353,16 +351,12 @@ impl WarningCollector {
             .into_iter()
             .map(|(warning, count)| {
                 if count > 1 {
-                    warning
-                        .split_once("；原生分享包")
-                        .map_or_else(
-                            || format!("{warning}（共 {count} 项）"),
-                            |(preview, native)| {
-                                format!(
-                                    "{preview}（共 {count} 项）；原生分享包{native}"
-                                )
-                            },
-                        )
+                    warning.split_once("；原生分享包").map_or_else(
+                        || format!("{warning}（共 {count} 项）"),
+                        |(preview, native)| {
+                            format!("{preview}（共 {count} 项）；原生分享包{native}")
+                        },
+                    )
                 } else {
                     warning
                 }
@@ -372,7 +366,5 @@ impl WarningCollector {
 }
 
 fn add_redaction_warning(warnings: &mut WarningCollector) {
-    warnings.add(
-        "预览中检测到疑似凭据，默认隐藏；原生分享包仍完整保留原文".to_owned(),
-    );
+    warnings.add("预览中检测到疑似凭据，默认隐藏；原生分享包仍完整保留原文".to_owned());
 }

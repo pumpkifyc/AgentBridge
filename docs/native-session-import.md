@@ -26,6 +26,17 @@ Manifest 记录源 thread/session ID、标题、时间、截止轮次、源工�
 - 文件只能来自 `CODEX_HOME/sessions` 或 `CODEX_HOME/archived_sessions`。
 - 接收方会校验清单、相对路径、文件数量、每文件 SHA-256、整体传输摘要和源 thread 一致性。
 
+## 与本机预览的关系
+
+分享方点击“生成分享预览”时，AgentBridge 只读取一次公开 App Server 历史，并同时生成两份结果：
+
+- `PreviewTimelineV1`：仅用于分享方本机界面，保留事件顺序、命令、diff、工具调用、错误、未知 JSON 和敏感原文标记。
+- `SnapshotV1` 与 `.agbridge`：前者维持现有局域网兼容协议，后者原样保存 rollout 文件及其 `history_base` 依赖。
+
+预览中的折叠和隐藏只影响展示。敏感块必须由用户逐块点击后才会进入页面 DOM；`PreviewTimelineV1` 不会进入配对信息、局域网元数据或传输协议。原生包中的 rollout 字节不会因预览处理而重写。
+
+自动化集成测试在临时 `CODEX_HOME` 中构造包含父会话依赖的复杂历史，验证用户、助手、计划、思考、命令、diff、MCP、动态工具、Web 搜索、图片、错误和未知条目均进入时间线，同时核对包内每个 rollout 的大小、SHA-256 和原始字节。可选的真实本机会话测试只在显式设置 `AGENTBRIDGE_REAL_CODEX_THREAD_ID` 后运行，日志只输出类别和数量。
+
 ## 导入流程
 
 1. 接收方将原生包保存到应用数据目录的 `staged-snapshots/`，文件名由分享 ID 的 SHA-256 派生。
@@ -49,3 +60,5 @@ Manifest 记录源 thread/session ID、标题、时间、截止轮次、源工�
 ## 当前限制
 
 Codex 桌面版没有公开 deep link 可直接定位任意 thread。AgentBridge 可通过公开 `thread/list` 检查会话是否存在，并尝试系统打开方式；若桌面版没有立即刷新，重启 Codex 后会在历史列表中出现该原生会话。
+
+当前版本完成 macOS 构建与安装验收。Windows 保持代码兼容，但本轮不生成 Windows 安装包。

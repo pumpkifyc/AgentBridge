@@ -209,6 +209,16 @@ fn full_fidelity_items_page() -> Value {
                 "content": [{"type": "text", "text": "完整预览"}]
             }), 110),
             item_entry("turn-1", json!({
+                "type": "agentMessage",
+                "id": "agent-full",
+                "text": "完整预览已完成"
+            }), 115),
+            item_entry("turn-1", json!({
+                "type": "plan",
+                "id": "plan-full",
+                "text": "检查、验证、交付"
+            }), 118),
+            item_entry("turn-1", json!({
                 "type": "reasoning",
                 "id": "reasoning-full",
                 "summary": ["检查历史结构"],
@@ -224,6 +234,16 @@ fn full_fidelity_items_page() -> Value {
                 "exitCode": 0,
                 "durationMs": 12
             }), 130),
+            item_entry("turn-1", json!({
+                "type": "commandExecution",
+                "id": "command-output-full",
+                "command": "npm test",
+                "cwd": "/tmp/project",
+                "status": "completed",
+                "aggregatedOutput": "token=sk-test-example-12345678 全部测试通过",
+                "exitCode": 0,
+                "durationMs": 24
+            }), 135),
             item_entry("turn-1", json!({
                 "type": "fileChange",
                 "id": "file-full",
@@ -269,6 +289,16 @@ fn full_fidelity_items_page() -> Value {
                 "id": "image-full",
                 "path": "/tmp/project/image.png"
             }), 190),
+            item_entry("turn-1", json!({
+                "type": "imageGeneration",
+                "id": "generated-image-full",
+                "fileId": "generated-image-1"
+            }), 195),
+            item_entry("turn-1", json!({
+                "type": "error",
+                "id": "error-full",
+                "message": "一个可折叠的历史错误"
+            }), 198),
             item_entry("turn-1", json!({
                 "type": "futureItem",
                 "id": "future-full",
@@ -341,10 +371,20 @@ fn main() {
                 };
                 emit(json!({"id": id, "result": page}));
             }
-            "thread/read" => emit(json!({
-                "id": id,
-                "result": {"thread": thread_wire("source-thread")}
-            })),
+            "thread/read" => {
+                let mut thread = thread_wire("source-thread");
+                if mode == "full-fidelity"
+                    && let Ok(codex_home) = std::env::var("CODEX_HOME")
+                {
+                    thread["path"] = Value::String(format!(
+                        "{codex_home}/sessions/2026/11/13/rollout-2026-11-13T00-00-00-source-thread.jsonl"
+                    ));
+                }
+                emit(json!({
+                    "id": id,
+                    "result": {"thread": thread}
+                }));
+            }
             "thread/turns/list" => {
                 if mode == "unsupported-items" {
                     emit_error(id, -32601, "thread/turns/list is not supported yet");

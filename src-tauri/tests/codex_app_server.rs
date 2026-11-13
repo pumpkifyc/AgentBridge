@@ -145,7 +145,10 @@ fn read_thread_data_preserves_all_item_types_raw_json_and_order() {
         kinds,
         [
             "userMessage",
+            "agentMessage",
+            "plan",
             "reasoning",
+            "commandExecution",
             "commandExecution",
             "fileChange",
             "mcpToolCall",
@@ -153,13 +156,15 @@ fn read_thread_data_preserves_all_item_types_raw_json_and_order() {
             "functionCallOutput",
             "webSearch",
             "imageView",
+            "imageGeneration",
+            "error",
             "futureItem",
         ]
     );
-    assert_eq!(recorded.data.turns[0].items[9].raw["payloadValue"], 42);
-    assert_eq!(recorded.data.turns[0].items[2].timestamp, Some(130));
+    assert_eq!(recorded.data.turns[0].items[14].raw["payloadValue"], 42);
+    assert_eq!(recorded.data.turns[0].items[4].timestamp, Some(130));
     assert_eq!(
-        recorded.data.turns[0].items[9].id.as_deref(),
+        recorded.data.turns[0].items[14].id.as_deref(),
         Some("future-full")
     );
 

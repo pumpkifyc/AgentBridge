@@ -407,10 +407,7 @@ fn approved_transfer_stages_a_validated_snapshot_without_creating_a_thread() {
     )
     .get();
     assert_eq!(preview["metadata"]["messageCount"], 1);
-    assert_eq!(
-        preview["metadata"]["warnings"][0],
-        "摘要预览：已省略图片附件"
-    );
+    assert_eq!(preview["metadata"]["warnings"][0], "已省略图片附件");
 
     let staged_value = invoke(
         &app,

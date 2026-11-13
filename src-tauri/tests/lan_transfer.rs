@@ -175,7 +175,7 @@ async fn preview_returns_only_metadata_and_accept_transfers_validated_snapshot()
     assert_eq!(proposal.metadata.share_id, invitation.id);
     assert_eq!(proposal.metadata.source_title, "修复登录流程");
     assert_eq!(proposal.metadata.message_count, 2);
-    assert_eq!(proposal.metadata.warnings, vec!["摘要预览：已省略图片附件"]);
+    assert_eq!(proposal.metadata.warnings, vec!["已省略图片附件"]);
     assert_eq!(
         proposal.metadata.source_working_directory.as_deref(),
         Some("/Users/alice/project")

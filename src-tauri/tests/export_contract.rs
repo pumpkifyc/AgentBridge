@@ -163,13 +163,13 @@ fn start_share_uses_a_nested_camel_case_request_and_returns_the_tls_fingerprint(
 }
 
 #[test]
-fn preview_snapshot_uses_a_nested_camel_case_request_with_a_preview_token() {
+fn generate_preview_uses_a_nested_camel_case_request_with_a_preview_token() {
     let request: PreviewSnapshotRequest = serde_json::from_value(json!({
         "threadId": "thread-1",
         "cutoffTurnId": "turn-2",
         "previewId": "preview-1"
     }))
-    .expect("前端 preview_snapshot 请求应可解析");
+    .expect("前端 generate_preview 请求应可解析");
 
     assert_eq!(request.thread_id, "thread-1");
     assert_eq!(request.cutoff_turn_id.as_deref(), Some("turn-2"));

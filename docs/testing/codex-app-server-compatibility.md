@@ -29,6 +29,10 @@ macOS 从 Finder 启动的应用不会可靠继承终端 `PATH`。AgentBridge �
 
 会话列表只加载轻量元数据，并提供按标题、预览、工作目录和仓库标识即时搜索。选中会话只加载截止轮次；用户明确点击“生成分享预览”后才读取完整历史。每次预览由前端生成独立 `previewId`，Rust 将快照与会话 ID 绑定保存；切换会话、截止轮次、重新生成预览或离开页面时会取消旧令牌，迟到的异步结果也会被丢弃并清理。创建邀请必须同时提交匹配的 `threadId` 与 `previewId`，不能复用其他会话的旧预览。
 
+全保真预览使用同一次 `thread/items/list` 分页结果生成版本化的 `PreviewTimelineV1` 和兼容的 `SnapshotV1`。时间线保留用户消息、助手回复、计划、思考、命令、文件 diff、MCP/动态工具、Web 搜索、图片、错误和未知 JSON，并按 Codex 返回顺序展示。分享页默认从最新轮次开始，每次可加载更早 3 轮；命令输出、diff、工具结果和未知 JSON 默认折叠，疑似凭据默认隐藏，用户可逐块展开本地原文。
+
+`PreviewTimelineV1` 只经本机 Tauri IPC 返回分享方界面，不进入局域网元数据、配对信息或传输协议。局域网仍只传兼容元数据和原始 `.agbridge`；原生包继续原样保存 rollout 字节及其分叉依赖。接收方和导入页会说明折叠只影响在线预览，原始会话包仍完整保留。
+
 分享方界面自动检测非回环、非链路本地 IPv4 地址并优先选择局域网地址。只有检测不到局域网地址时才回退到 `127.0.0.1`，并明确提示该地址只适合本机测试。Rust 命令错误以结构化 `{ code, message }` 返回，前端提取中文 `message` 显示，不再出现 `[object Object]`。
 
 接收方保留通过有效分享收到的 `.agbridge` 原生会话包；导入时先安装 rollout，再使用公开 `thread/fork`、`lastTurnId` 和 `thread/name/set` 创建本地分支。核心会话读写通过 App Server 完成。由于 `thread/fork` 创建的文件不会总被桌面版索引立即发现，AgentBridge 会在本机 Codex 状态索引中同步标题、预览和用户会话可见性字段；该兼容步骤只修改接收方本机索引，不上传数据。
@@ -62,3 +66,5 @@ macOS 从 Finder 启动的应用不会可靠继承终端 `PATH`。AgentBridge �
 ### 双平台待验收事项
 
 当前 macOS 环境已确认 Codex CLI 0.167.2 的会话列表、历史分页、rollout 路径和 `thread/fork` 可用，并在临时 `CODEX_HOME` 完成原生导入验证。发布前仍需在 macOS 和 Windows 上分别使用版本匹配的 Codex CLI 与桌面版，执行「安装 rollout → `thread/fork` → 桌面版历史可见 → 继续新轮次」，记录双平台最低测试版本和状态索引兼容性。
+
+本轮全保真预览只在 macOS 构建并安装。Windows 代码路径保持编译兼容，Windows 安装包按当前范围暂缓，待后续明确要求后单独构建和验收。
