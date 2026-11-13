@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { CodexStatus, SnapshotV1, ThreadPage, ThreadSummary, TurnSummary } from "./shareTypes";
+import type {
+  CodexStatus,
+  GeneratedPreview,
+  ThreadPage,
+  ThreadSummary,
+  TurnSummary,
+} from "./shareTypes";
 
 export interface LocalAddress {
   ip: string;
@@ -29,12 +35,12 @@ export const shareApi = {
     return invoke<TurnSummary[]>("list_turns", { threadId });
   },
 
-  async previewSnapshot(
+  async generatePreview(
     threadId: string,
     cutoffTurnId: string | null,
     previewId: string,
-  ): Promise<SnapshotV1> {
-    return invoke<SnapshotV1>("preview_snapshot", {
+  ): Promise<GeneratedPreview> {
+    return invoke<GeneratedPreview>("generate_preview", {
       request: { threadId, cutoffTurnId, previewId },
     });
   },

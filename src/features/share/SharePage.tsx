@@ -6,6 +6,7 @@ import { describeError } from "./shareErrors";
 import { shareApi } from "./shareApi";
 import type {
   CodexStatus,
+  PreviewTimelineV1,
   SharePageState,
   SnapshotV1,
   ThreadSummary,
@@ -17,6 +18,7 @@ interface PreparedPreview {
   threadId: string;
   cutoffTurnId: string | null;
   snapshot: SnapshotV1;
+  timeline: PreviewTimelineV1;
 }
 
 interface Props {
@@ -154,12 +156,18 @@ export function SharePage({ active = true }: Props) {
     activePreviewId.current = previewId;
     setPreviewLoading(true);
     try {
-      const result = await shareApi.previewSnapshot(threadId, cutoffTurnId, previewId);
+      const result = await shareApi.generatePreview(threadId, cutoffTurnId, previewId);
       if (activePreviewId.current !== previewId) {
         void shareApi.cancelPreview(previewId).catch(() => undefined);
         return;
       }
-      setPreview({ id: previewId, threadId, cutoffTurnId, snapshot: result });
+      setPreview({
+        id: previewId,
+        threadId,
+        cutoffTurnId,
+        snapshot: result.snapshot,
+        timeline: result.timeline,
+      });
     } catch (error) {
       if (activePreviewId.current === previewId) {
         setPreviewError(describeError(error));
@@ -268,6 +276,7 @@ export function SharePage({ active = true }: Props) {
         </section>
         <ConversationPreview
           key={previewReady ? preview.id : "empty-preview"}
+          timeline={previewReady ? preview.timeline : null}
           snapshot={previewReady ? preview.snapshot : null}
           loading={false}
           error={previewError}

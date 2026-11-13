@@ -97,6 +97,11 @@ describe("分享方配对面板", () => {
         },
       });
     });
+    const startShare = calls.find((call) => call.command === "start_share");
+    const serializedRequest = JSON.stringify(startShare?.args);
+    expect(serializedRequest).not.toContain("timeline");
+    expect(serializedRequest).not.toContain("修复登录");
+    expect(serializedRequest).not.toContain("用户消息");
     internals.invoke = originalInvoke;
   });
 

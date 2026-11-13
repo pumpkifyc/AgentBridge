@@ -2,7 +2,12 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockTauri, resetTauriMocks } from "../../test-setup";
 import { SharePage } from "./SharePage";
-import type { SnapshotV1, ThreadSummary, TurnSummary } from "./shareTypes";
+import type {
+  PreviewTimelineV1,
+  SnapshotV1,
+  ThreadSummary,
+  TurnSummary,
+} from "./shareTypes";
 
 const threads: ThreadSummary[] = [
   {
@@ -65,11 +70,48 @@ function snapshot(overrides: Partial<SnapshotV1> = {}): SnapshotV1 {
   };
 }
 
+function timeline(sourceThreadId = "thread-1"): PreviewTimelineV1 {
+  return {
+    schemaVersion: 1,
+    sourceThreadId,
+    cutoffTurnId: "turn-2",
+    turns: [
+      {
+        id: "turn-1",
+        index: 0,
+        status: "completed",
+        startedAt: 110,
+        completedAt: 190,
+        items: [
+          {
+            id: "user-1",
+            kind: "user_message",
+            title: "用户消息",
+            status: null,
+            timestamp: 110,
+            sensitive: false,
+            blocks: [
+              {
+                kind: "text",
+                label: "消息",
+                content: "修复登录",
+                sensitive: false,
+                defaultExpanded: true,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    notices: [],
+  };
+}
+
 function mockAvailable() {
   mockTauri("codex_status", {}, { state: "available", detail: "本机 Codex 可用" });
   mockTauri("list_threads", { cursor: null }, { data: threads, nextCursor: null });
   mockTauri("list_turns", "*", turns);
-  mockTauri("preview_snapshot", "*", snapshot());
+  mockTauri("generate_preview", "*", { snapshot: snapshot(), timeline: timeline() });
   mockTauri("cancel_preview", "*", undefined);
   mockTauri("list_local_addresses", {}, [{ ip: "192.168.1.20", name: "en0" }]);
 }
@@ -113,6 +155,33 @@ afterEach(() => {
 });
 
 describe("分享会话页面", () => {
+  it("点击后立即显示加载状态", async () => {
+    let resolvePreview: (value: { snapshot: SnapshotV1; timeline: PreviewTimelineV1 }) => void = () => {};
+    const pendingPreview = new Promise<{ snapshot: SnapshotV1; timeline: PreviewTimelineV1 }>((resolve) => {
+      resolvePreview = resolve;
+    });
+    const calls = captureInvocations();
+    mockTauri("codex_status", {}, { state: "available", detail: "本机 Codex 可用" });
+    mockTauri("list_threads", { cursor: null }, { data: threads, nextCursor: null });
+    mockTauri("list_turns", "*", turns);
+    mockTauri("generate_preview", "*", pendingPreview);
+    mockTauri("cancel_preview", "*", undefined);
+    mockTauri("list_local_addresses", {}, [{ ip: "192.168.1.20", name: "en0" }]);
+    render(<SharePage />);
+
+    await clickPreview();
+
+    expect(calls.some((call) => call.command === "generate_preview")).toBe(true);
+    const button = screen.getByRole("button", { name: "正在生成预览…" });
+    expect(button).toBeDisabled();
+
+    await act(async () => {
+      resolvePreview({ snapshot: snapshot(), timeline: timeline() });
+      await pendingPreview;
+    });
+    expect(await screen.findByText("修复登录")).toBeInTheDocument();
+  });
+
   it("先加载轻量会话列表，只有点击后才读取完整快照", async () => {
     const calls = captureInvocations();
     mockAvailable();
@@ -121,13 +190,13 @@ describe("分享会话页面", () => {
     expect(screen.getByText("正在检查本机 Codex…")).toBeInTheDocument();
     expect(await screen.findByText("修复登录流程")).toBeInTheDocument();
     expect(screen.queryByText("会话预览")).not.toBeInTheDocument();
-    expect(calls.some((call) => call.command === "preview_snapshot")).toBe(false);
+    expect(calls.some((call) => call.command === "generate_preview")).toBe(false);
 
     await clickPreview();
 
     await waitFor(() => {
       expect(calls).toContainEqual({
-        command: "preview_snapshot",
+        command: "generate_preview",
         args: {
           request: {
             threadId: "thread-1",
@@ -139,7 +208,8 @@ describe("分享会话页面", () => {
     });
     expect(await screen.findByText("会话预览")).toBeInTheDocument();
     expect(screen.getByText("仅作说明，接收方需选择自己的项目目录", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("已省略不支持的 图片附件 内容")).toBeInTheDocument();
+    expect(screen.getByText("修复登录")).toBeInTheDocument();
+    expect(screen.queryByText("已省略不支持的 图片附件 内容")).not.toBeInTheDocument();
     expect(screen.queryByText("rm -rf /")).not.toBeInTheDocument();
   });
 
@@ -168,7 +238,7 @@ describe("分享会话页面", () => {
     mockTauri("codex_status", {}, { state: "available", detail: "本机 Codex 可用" });
     mockTauri("list_threads", { cursor: null }, { data: threads, nextCursor: null });
     mockTauri("list_turns", "*", turns);
-    mockTauri("preview_snapshot", "*", snapshot());
+    mockTauri("generate_preview", "*", { snapshot: snapshot(), timeline: timeline() });
     mockTauri("cancel_preview", "*", undefined);
     mockTauri("list_local_addresses", {}, [{ ip: "192.168.1.20", name: "en0" }]);
     render(<SharePage />);
@@ -194,14 +264,35 @@ describe("分享会话页面", () => {
       internals.invoke = originalInvoke;
     };
     internals.invoke = async (command, args) => {
-      if (command === "preview_snapshot") {
+      if (command === "generate_preview") {
         const request = (args?.request ?? args) as Record<string, unknown>;
         if (request.threadId === "thread-2") {
-          return snapshot({
-            metadata: { ...snapshot().metadata, sourceThreadId: "thread-2", title: "补充测试" },
-            messages: [{ role: "user", text: "补充回归测试", turnIndex: 0, timestamp: 210, historicalToolSummary: null }],
-            warnings: [],
-          });
+          return {
+            snapshot: snapshot({
+              metadata: { ...snapshot().metadata, sourceThreadId: "thread-2", title: "补充测试" },
+              messages: [{ role: "user", text: "补充回归测试", turnIndex: 0, timestamp: 210, historicalToolSummary: null }],
+              warnings: [],
+            }),
+            timeline: {
+              ...timeline("thread-2"),
+              turns: [
+                {
+                  ...timeline("thread-2").turns[0],
+                  items: [
+                    {
+                      ...timeline("thread-2").turns[0].items[0],
+                      blocks: [
+                        {
+                          ...timeline("thread-2").turns[0].items[0].blocks[0],
+                          content: "补充回归测试",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          };
         }
       }
       return originalInvoke(command, args);
@@ -236,7 +327,7 @@ describe("分享会话页面", () => {
 
     await waitFor(() => {
       expect(calls).toContainEqual({
-        command: "preview_snapshot",
+        command: "generate_preview",
         args: {
           request: {
             threadId: "thread-1",
@@ -267,7 +358,7 @@ describe("分享会话页面", () => {
         args: { previewId: expect.any(String) },
       });
     });
-    const oldPreviewId = calls.find((call) => call.command === "preview_snapshot")
+    const oldPreviewId = calls.find((call) => call.command === "generate_preview")
       ?.args?.request as { previewId: string };
     expect(calls).toContainEqual({
       command: "cancel_preview",
@@ -278,7 +369,7 @@ describe("分享会话页面", () => {
   it("快照命令返回对象错误时显示 message，而不是 [object Object]", async () => {
     mockAvailable();
     mockTauri(
-      "preview_snapshot",
+      "generate_preview",
       "*",
       new Error("Codex App Server 请求失败（-32600）：历史接口已变更"),
     );
@@ -293,19 +384,19 @@ describe("分享会话页面", () => {
   });
 
   it("切换会话时取消尚未完成的旧预览，并忽略迟到结果", async () => {
-    let resolvePreview: (value: SnapshotV1) => void = () => {};
-    const pendingPreview = new Promise<SnapshotV1>((resolve) => {
+    let resolvePreview: (value: { snapshot: SnapshotV1; timeline: PreviewTimelineV1 }) => void = () => {};
+    const pendingPreview = new Promise<{ snapshot: SnapshotV1; timeline: PreviewTimelineV1 }>((resolve) => {
       resolvePreview = resolve;
     });
     const calls = captureInvocations();
     mockAvailable();
-    mockTauri("preview_snapshot", "*", pendingPreview);
+    mockTauri("generate_preview", "*", pendingPreview);
     render(<SharePage />);
 
     await screen.findByRole("button", { name: /修复登录流程/ });
     await clickPreview();
     await waitFor(() => {
-      expect(calls.some((call) => call.command === "preview_snapshot")).toBe(true);
+      expect(calls.some((call) => call.command === "generate_preview")).toBe(true);
     });
     fireEvent.click(screen.getByRole("button", { name: /补充测试/ }));
 
@@ -313,7 +404,7 @@ describe("分享会话页面", () => {
       expect(calls.some((call) => call.command === "cancel_preview")).toBe(true);
     });
     await act(async () => {
-      resolvePreview(snapshot());
+      resolvePreview({ snapshot: snapshot(), timeline: timeline() });
       await pendingPreview;
     });
     await waitFor(() => {

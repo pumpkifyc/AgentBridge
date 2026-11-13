@@ -117,6 +117,11 @@ export interface PreviewTimelineV1 {
   notices: PreviewNotice[];
 }
 
+export interface GeneratedPreview {
+  snapshot: SnapshotV1;
+  timeline: PreviewTimelineV1;
+}
+
 export type SharePageState =
   | { kind: "loading" }
   | { kind: "available"; status: CodexStatus; threads: ThreadSummary[]; turns: TurnSummary[] }
