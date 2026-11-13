@@ -415,18 +415,32 @@ fn codex_version() -> Result<String, CommandError> {
     let executable = crate::codex::executable::resolve_codex_executable()
         .map_err(CommandError::from)?;
     let mut command = std::process::Command::new(executable);
-    crate::process::configure_quiet_command(&mut command);
+    crate::codex::executable::configure_codex_command(&mut command);
     let output = command
         .arg("--version")
         .output()
         .map_err(|error| CommandError::new("notInstalled", format!("找不到 Codex CLI：{error}")))?;
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
         return Err(CommandError::new(
             "codexUnavailable",
-            "Codex CLI 返回了非零退出状态",
+            codex_version_failure_message(output.status.code(), &stdout, &stderr),
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn codex_version_failure_message(exit_code: Option<i32>, stdout: &str, stderr: &str) -> String {
+    let detail = if !stderr.trim().is_empty() {
+        stderr.trim()
+    } else if !stdout.trim().is_empty() {
+        stdout.trim()
+    } else {
+        "未提供错误信息"
+    };
+    let exit_code = exit_code.map_or_else(|| "未知".into(), |code| code.to_string());
+    format!("Codex CLI 返回了非零退出状态（退出码 {exit_code}）：{detail}")
 }
 
 #[tauri::command]
@@ -1205,6 +1219,19 @@ mod local_address_tests {
 
         assert_eq!(addresses[0].name, "Wi-Fi");
         assert_eq!(addresses[1].name, "vEthernet (WSL)");
+    }
+}
+
+#[cfg(test)]
+mod codex_version_tests {
+    use super::*;
+
+    #[test]
+    fn reports_exit_code_and_stderr_when_codex_fails() {
+        let message = codex_version_failure_message(Some(127), "", "env: node: No such file");
+
+        assert!(message.contains("退出码 127"));
+        assert!(message.contains("env: node: No such file"));
     }
 }
 

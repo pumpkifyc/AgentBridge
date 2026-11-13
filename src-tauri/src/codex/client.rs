@@ -1,6 +1,6 @@
 use super::{
     error::CodexError,
-    executable::resolve_codex_executable,
+    executable::{configure_codex_command, resolve_codex_executable},
     models::{Page, ThreadSummary, TurnSummary},
     protocol::{RpcRequest, RpcResponse},
 };
@@ -52,7 +52,7 @@ impl CodexClient {
         timeout: Duration,
     ) -> Result<Self, CodexError> {
         let mut command = Command::new(executable.into());
-        crate::process::configure_quiet_command(&mut command);
+        configure_codex_command(&mut command);
         let mut child = command
             .arg("app-server")
             .arg("--stdio")
