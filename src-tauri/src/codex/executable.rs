@@ -66,9 +66,7 @@ fn codex_command_path(path_value: Option<OsString>, home: Option<PathBuf>) -> Op
     }
     let mut seen = std::collections::HashSet::new();
     directories.retain(|directory| {
-        !directory.as_os_str().is_empty()
-            && directory.exists()
-            && seen.insert(directory.clone())
+        !directory.as_os_str().is_empty() && directory.exists() && seen.insert(directory.clone())
     });
     env::join_paths(directories).ok()
 }
@@ -395,8 +393,7 @@ mod tests {
         fs::create_dir_all(&npm_bin).expect("创建 npm 目录");
         fs::create_dir_all(&local_bin).expect("创建本地工具目录");
         fs::create_dir_all(&system_bin).expect("创建系统工具目录");
-        let existing = env::join_paths([&system_bin])
-            .expect("构造测试 PATH");
+        let existing = env::join_paths([&system_bin]).expect("构造测试 PATH");
 
         let path = codex_command_path(Some(existing), Some(home)).expect("应构造子进程 PATH");
         let directories: Vec<PathBuf> = env::split_paths(&path).collect();

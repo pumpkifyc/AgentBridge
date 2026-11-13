@@ -7,7 +7,7 @@ use std::{
 };
 
 pub const PROTOCOL_VERSION: u16 = 1;
-pub const MAX_TRANSFER_BYTES: usize = 20 * 1024 * 1024;
+pub const MAX_TRANSFER_BYTES: usize = crate::native::MAX_BUNDLE_BYTES;
 pub const MAX_CHUNK_BYTES: usize = 64 * 1024;
 pub const MAX_FAILED_AUTHENTICATIONS: usize = 3;
 
@@ -20,16 +20,16 @@ pub struct EphemeralCertificate {
 impl EphemeralCertificate {
     pub fn generate() -> Self {
         let key_pair = KeyPair::generate().expect("生成临时证书密钥失败");
-        let mut params = CertificateParams::new(vec!["agentbridge.local".to_owned()])
-            .expect("构造证书参数失败");
+        let mut params =
+            CertificateParams::new(vec!["agentbridge.local".to_owned()]).expect("构造证书参数失败");
         params.distinguished_name = DistinguishedName::new();
         params
             .distinguished_name
             .push(DnType::CommonName, "AgentBridge 临时分享");
-        params.subject_alt_names = vec![SanType::DnsName(Ia5String::try_from("agentbridge.local".to_owned()).expect("DNS 名称有效"))];
-        let certificate = params
-            .self_signed(&key_pair)
-            .expect("签发临时证书失败");
+        params.subject_alt_names = vec![SanType::DnsName(
+            Ia5String::try_from("agentbridge.local".to_owned()).expect("DNS 名称有效"),
+        )];
+        let certificate = params.self_signed(&key_pair).expect("签发临时证书失败");
         Self {
             certificate_der: certificate.der().to_vec(),
             private_key_der: key_pair.serialize_der(),
@@ -152,10 +152,7 @@ pub enum ErrorCode {
 }
 
 impl ShareMetadata {
-    pub fn from_snapshot(
-        share_id: &str,
-        snapshot: &crate::snapshot::schema::SnapshotV1,
-    ) -> Self {
+    pub fn from_snapshot(share_id: &str, snapshot: &crate::snapshot::schema::SnapshotV1) -> Self {
         Self {
             share_id: share_id.to_owned(),
             source_title: snapshot.metadata.title.clone(),
@@ -164,7 +161,11 @@ impl ShareMetadata {
             source_working_directory: snapshot.metadata.source_working_directory.clone(),
             message_count: snapshot.messages.len(),
             cutoff_turn_id: snapshot.metadata.cutoff_turn_id.clone(),
-            warnings: snapshot.warnings.clone(),
+            warnings: snapshot
+                .warnings
+                .iter()
+                .map(|warning| format!("摘要预览：{warning}"))
+                .collect(),
             schema_version: snapshot.schema_version,
         }
     }

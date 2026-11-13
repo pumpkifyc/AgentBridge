@@ -1,5 +1,7 @@
 # AgentBridge 局域网会话分享设计
 
+> 历史设计说明：本文描述第一版“合成历史提示”方案。当前实现已改为原生 rollout 包、`thread/fork` 和本机 Codex 会话索引可见性同步，详见 [原生会话包与导入机制](../../native-session-import.md)。
+
 日期：2026-11-11  
 状态：已通过审阅
 

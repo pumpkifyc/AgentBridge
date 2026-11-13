@@ -1,14 +1,9 @@
 use agentbridge_lib::{
     commands::{AppState, ReceiveState, StagedSnapshot, validate_received_pairing},
+    native,
     pairing::{InvitationManager, InvitationState},
-    snapshot::{
-        schema::{MessageRole, SnapshotMessage, SnapshotMetadata, SnapshotV1},
-        validate::validate_snapshot,
-    },
-    transfer::{
-        TransferServer,
-        protocol::certificate_for,
-    },
+    snapshot::schema::{MessageRole, SnapshotMessage, SnapshotMetadata, SnapshotV1},
+    transfer::{TransferServer, protocol::certificate_for},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -72,18 +67,25 @@ fn validates_the_fingerprint_derived_verification_code_before_connecting() {
         verification_code: "000000".into(),
         ..valid.clone()
     };
-    assert!(validate_received_pairing(&wrong_code).is_err(), "错误验证码必须被拒绝");
-    assert!(validate_received_pairing(&agentbridge_lib::transfer::protocol::PairingInfo {
-        fingerprint: "sha256:not-a-digest".into(),
-        verification_code: "012345".into(),
-        ..valid.clone()
-    })
-    .is_err());
-    assert!(validate_received_pairing(&agentbridge_lib::transfer::protocol::PairingInfo {
-        endpoint: String::new(),
-        ..valid
-    })
-    .is_err());
+    assert!(
+        validate_received_pairing(&wrong_code).is_err(),
+        "错误验证码必须被拒绝"
+    );
+    assert!(
+        validate_received_pairing(&agentbridge_lib::transfer::protocol::PairingInfo {
+            fingerprint: "sha256:not-a-digest".into(),
+            verification_code: "012345".into(),
+            ..valid.clone()
+        })
+        .is_err()
+    );
+    assert!(
+        validate_received_pairing(&agentbridge_lib::transfer::protocol::PairingInfo {
+            endpoint: String::new(),
+            ..valid
+        })
+        .is_err()
+    );
 }
 
 fn valid_pairing(
@@ -127,6 +129,34 @@ fn snapshot() -> SnapshotV1 {
         }],
         warnings: vec!["已省略图片附件".into()],
     }
+}
+
+fn native_bundle(snapshot: &SnapshotV1) -> Vec<u8> {
+    let root = std::env::temp_dir().join(format!(
+        "agentbridge-receive-native-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("系统时间有效")
+            .as_nanos()
+    ));
+    let sessions = root.join("sessions/2026/11/13");
+    fs::create_dir_all(&sessions).expect("创建测试会话目录");
+    let rollout = sessions.join(format!(
+        "rollout-2026-11-13T00-00-00-{}.jsonl",
+        snapshot.metadata.source_thread_id
+    ));
+    fs::write(
+        &rollout,
+        format!(
+            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{}\",\"session_id\":\"{}\"}}}}\n",
+            snapshot.metadata.source_thread_id, snapshot.metadata.source_thread_id
+        ),
+    )
+    .expect("写入测试会话");
+    let bundle = native::build_bundle(&root, &rollout, snapshot).expect("构建原生会话包");
+    let _ = fs::remove_dir_all(root);
+    bundle
 }
 
 fn invoke(
@@ -184,16 +214,14 @@ fn wrong_verification_code_cannot_reach_the_transfer_server() {
     let runtime = test_runtime();
     let _guard = runtime.enter();
     let manager = Arc::new(InvitationManager::new());
-    let invitation = manager.create_with_options(
-        "snapshot-1",
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        0,
-        60,
-    );
+    let invitation =
+        manager.create_with_options("snapshot-1", IpAddr::V4(Ipv4Addr::LOCALHOST), 0, 60);
+    let current_snapshot = snapshot();
     let handle = runtime
         .block_on(TransferServer::serve(
             invitation.clone(),
-            snapshot(),
+            current_snapshot.clone(),
+            native_bundle(&current_snapshot),
             manager.clone(),
         ))
         .expect("应启动传输服务器");
@@ -217,9 +245,14 @@ fn wrong_verification_code_cannot_reach_the_transfer_server() {
         verification_code: "999999".into(),
         expires_at: invitation.expires_at,
     };
-    let response = invoke(&app, "preview_share", 0, serde_json::json!({
-        "request": { "pairingInfo": serde_json::to_string(&pairing).unwrap() },
-    }))
+    let response = invoke(
+        &app,
+        "preview_share",
+        0,
+        serde_json::json!({
+            "request": { "pairingInfo": serde_json::to_string(&pairing).unwrap() },
+        }),
+    )
     .0
     .recv_timeout(std::time::Duration::from_secs(5))
     .expect("命令应响应")
@@ -234,16 +267,14 @@ fn cancelling_a_transfer_aborts_the_download_task() {
     let runtime = test_runtime();
     let _guard = runtime.enter();
     let manager = Arc::new(InvitationManager::new());
-    let invitation = manager.create_with_options(
-        "snapshot-1",
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        0,
-        60,
-    );
+    let invitation =
+        manager.create_with_options("snapshot-1", IpAddr::V4(Ipv4Addr::LOCALHOST), 0, 60);
+    let current_snapshot = snapshot();
     let handle = runtime
         .block_on(TransferServer::serve(
             invitation.clone(),
-            snapshot(),
+            current_snapshot.clone(),
+            native_bundle(&current_snapshot),
             manager.clone(),
         ))
         .expect("应启动传输服务器");
@@ -270,9 +301,14 @@ fn cancelling_a_transfer_aborts_the_download_task() {
         verification_code: invitation.verification_code.clone(),
         expires_at: invitation.expires_at,
     };
-    invoke(&app, "preview_share", 0, serde_json::json!({
-        "request": { "pairingInfo": serde_json::to_string(&pairing).unwrap() },
-    }))
+    invoke(
+        &app,
+        "preview_share",
+        0,
+        serde_json::json!({
+            "request": { "pairingInfo": serde_json::to_string(&pairing).unwrap() },
+        }),
+    )
     .get();
     let receive_state = app.state::<ReceiveState>();
     let client = receive_state
@@ -292,18 +328,25 @@ fn cancelling_a_transfer_aborts_the_download_task() {
         .lock()
         .expect("传输任务锁可读取")
         .insert(invitation.id.clone(), abort);
-    invoke(&app, "cancel_transfer", 1, serde_json::json!({
-        "shareId": invitation.id,
-    }))
+    invoke(
+        &app,
+        "cancel_transfer",
+        1,
+        serde_json::json!({
+            "shareId": invitation.id,
+        }),
+    )
     .get();
     let result = runtime.block_on(task);
     assert!(result.is_err() && result.expect_err("应中止").is_cancelled());
     let receive_state = app.state::<ReceiveState>();
-    assert!(receive_state
-        .transfers
-        .lock()
-        .expect("传输任务锁可读取")
-        .is_empty());
+    assert!(
+        receive_state
+            .transfers
+            .lock()
+            .expect("传输任务锁可读取")
+            .is_empty()
+    );
     handle.stop();
 }
 
@@ -312,16 +355,14 @@ fn approved_transfer_stages_a_validated_snapshot_without_creating_a_thread() {
     let runtime = test_runtime();
     let _guard = runtime.enter();
     let manager = Arc::new(InvitationManager::new());
-    let invitation = manager.create_with_options(
-        "snapshot-1",
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        0,
-        60,
-    );
+    let invitation =
+        manager.create_with_options("snapshot-1", IpAddr::V4(Ipv4Addr::LOCALHOST), 0, 60);
+    let current_snapshot = snapshot();
     let handle = runtime
         .block_on(TransferServer::serve(
             invitation.clone(),
-            snapshot(),
+            current_snapshot.clone(),
+            native_bundle(&current_snapshot),
             manager.clone(),
         ))
         .expect("应启动传输服务器");
@@ -356,27 +397,44 @@ fn approved_transfer_stages_a_validated_snapshot_without_creating_a_thread() {
         verification_code: invitation.verification_code.clone(),
         expires_at: invitation.expires_at,
     };
-    let preview: serde_json::Value = invoke(&app, "preview_share", 0, serde_json::json!({
-        "request": { "pairingInfo": serde_json::to_string(&pairing).unwrap() },
-    })).get();
+    let preview: serde_json::Value = invoke(
+        &app,
+        "preview_share",
+        0,
+        serde_json::json!({
+            "request": { "pairingInfo": serde_json::to_string(&pairing).unwrap() },
+        }),
+    )
+    .get();
     assert_eq!(preview["metadata"]["messageCount"], 1);
-    assert_eq!(preview["metadata"]["warnings"][0], "已省略图片附件");
+    assert_eq!(
+        preview["metadata"]["warnings"][0],
+        "摘要预览：已省略图片附件"
+    );
 
-    let staged_value = invoke(&app, "accept_share", 1, serde_json::json!({
-        "shareId": preview["shareId"],
-        "onEvent": "__CHANNEL__:1",
-    })).get();
+    let staged_value = invoke(
+        &app,
+        "accept_share",
+        1,
+        serde_json::json!({
+            "shareId": preview["shareId"],
+            "onEvent": "__CHANNEL__:1",
+        }),
+    )
+    .get();
     assert!(
         !staged_value.to_string().contains(&invitation.secret),
         "暂存结果不得回传一次性凭据"
     );
-    let staged: StagedSnapshot = serde_json::from_value(staged_value)
-        .expect("暂存结果应可解析");
+    let staged: StagedSnapshot = serde_json::from_value(staged_value).expect("暂存结果应可解析");
     assert_eq!(staged.metadata.share_id, preview["shareId"]);
     let bytes = fs::read(&staged.snapshot_path).expect("暂存文件应存在");
     assert_eq!(
-        validate_snapshot(&bytes).expect("暂存文件应通过二次校验"),
-        snapshot()
+        native::parse_bundle(&bytes)
+            .expect("暂存文件应通过原生会话包校验")
+            .manifest
+            .source_thread_id,
+        "source-thread"
     );
     assert!(
         !staged.snapshot_path.contains("/Users/alice/project"),
@@ -406,6 +464,9 @@ fn approved_transfer_stages_a_validated_snapshot_without_creating_a_thread() {
     )
     .get();
     assert!(!std::path::Path::new(&staged.snapshot_path).exists());
-    assert!(certificate_for(&invitation.fingerprint).is_none(), "传输完成后证书应清理");
+    assert!(
+        certificate_for(&invitation.fingerprint).is_none(),
+        "传输完成后证书应清理"
+    );
     handle.stop();
 }

@@ -27,7 +27,7 @@ function largeSnapshot(): SnapshotV1 {
   };
 }
 
-describe("会话快照预览", () => {
+describe("会话预览", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -71,6 +71,6 @@ describe("会话快照预览", () => {
     render(<ConversationPreview snapshot={largeSnapshot()} loading={false} error={null} />);
 
     expect(document.querySelector('[data-latest-turn-start="true"]')).toHaveTextContent("消息 202");
-    expect(screen.getByRole("list", { name: "快照消息列表" })).toHaveProperty("scrollTop", 240);
+    expect(screen.getByRole("list", { name: "会话消息列表" })).toHaveProperty("scrollTop", 240);
   });
 });

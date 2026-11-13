@@ -2,6 +2,7 @@ use crate::{
     codex::{client::CodexClient, error::CodexError, models::Page},
     db::ImportDatabase,
     imports::{ImportError, ImportRecord, ImportService},
+    native::{self, NativeBundleError},
     pairing::{InvitationManager, InvitationState},
     snapshot::{schema::SnapshotV1, validate::validate_snapshot},
     transfer::TransferServer,
@@ -16,7 +17,10 @@ use std::{
 };
 use tauri::{Manager, Runtime as TauriRuntime, State, WebviewWindow, ipc::Channel};
 use tauri_plugin_dialog::DialogExt;
-use tokio::{runtime::{Builder, Runtime}, task::AbortHandle};
+use tokio::{
+    runtime::{Builder, Runtime},
+    task::AbortHandle,
+};
 
 const MIN_COMPATIBLE_CLI: (u32, u32, u32) = (0, 167, 2);
 
@@ -67,6 +71,12 @@ impl From<CodexError> for CommandError {
     }
 }
 
+impl From<NativeBundleError> for CommandError {
+    fn from(error: NativeBundleError) -> Self {
+        Self::new("invalidNativeBundle", error.to_string())
+    }
+}
+
 pub struct AppState {
     pub invitations: Arc<InvitationManager>,
     pub servers: Mutex<HashMap<String, crate::transfer::TransferServerHandle>>,
@@ -96,6 +106,7 @@ impl Default for AppState {
 struct PreparedPreview {
     thread_id: String,
     snapshot: SnapshotV1,
+    native_bundle: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -108,6 +119,7 @@ impl PreviewRegistry {
         &self,
         request: &PreviewSnapshotRequest,
         snapshot: SnapshotV1,
+        native_bundle: Vec<u8>,
     ) -> Result<(), CommandError> {
         request.validate()?;
         let mut entries = self.entries.lock().expect("预览锁已中毒");
@@ -122,6 +134,7 @@ impl PreviewRegistry {
             PreparedPreview {
                 thread_id: request.thread_id.clone(),
                 snapshot,
+                native_bundle,
             },
         );
         Ok(())
@@ -131,7 +144,7 @@ impl PreviewRegistry {
         &self,
         thread_id: &str,
         preview_id: &str,
-    ) -> Result<SnapshotV1, CommandError> {
+    ) -> Result<(SnapshotV1, Vec<u8>), CommandError> {
         validate_preview_id(preview_id)?;
         let preview = self
             .entries
@@ -139,16 +152,14 @@ impl PreviewRegistry {
             .expect("预览锁已中毒")
             .get(preview_id)
             .cloned()
-            .ok_or_else(|| {
-                CommandError::new("invalidPreview", "分享预览已失效，请重新生成")
-            })?;
+            .ok_or_else(|| CommandError::new("invalidPreview", "分享预览已失效，请重新生成"))?;
         if preview.thread_id != thread_id {
             return Err(CommandError::new(
                 "invalidPreview",
                 "分享预览与会话不匹配，请重新生成",
             ));
         }
-        Ok(preview.snapshot)
+        Ok((preview.snapshot, preview.native_bundle))
     }
 
     fn cancel(&self, preview_id: &str) {
@@ -236,7 +247,7 @@ mod preview_registry_tests {
         let registry = PreviewRegistry::default();
         let preview_request = request("thread-1", "preview-1");
         registry
-            .insert(&preview_request, snapshot("thread-1"))
+            .insert(&preview_request, snapshot("thread-1"), vec![1, 2, 3])
             .expect("预览应保存成功");
 
         let error = registry
@@ -247,6 +258,7 @@ mod preview_registry_tests {
             registry
                 .snapshot_for_share("thread-1", "preview-1")
                 .expect("原会话应可继续使用预览")
+                .0
                 .metadata
                 .source_thread_id,
             "thread-1"
@@ -257,7 +269,11 @@ mod preview_registry_tests {
     fn cancelling_a_preview_prevents_later_sharing() {
         let registry = PreviewRegistry::default();
         registry
-            .insert(&request("thread-1", "preview-1"), snapshot("thread-1"))
+            .insert(
+                &request("thread-1", "preview-1"),
+                snapshot("thread-1"),
+                vec![1, 2, 3],
+            )
             .expect("预览应保存成功");
 
         registry.cancel("preview-1");
@@ -272,17 +288,26 @@ mod preview_registry_tests {
     fn duplicate_preview_token_is_rejected_without_overwriting_the_original() {
         let registry = PreviewRegistry::default();
         registry
-            .insert(&request("thread-1", "preview-1"), snapshot("thread-1"))
+            .insert(
+                &request("thread-1", "preview-1"),
+                snapshot("thread-1"),
+                vec![1, 2, 3],
+            )
             .expect("首个预览应保存成功");
 
         let error = registry
-            .insert(&request("thread-2", "preview-1"), snapshot("thread-2"))
+            .insert(
+                &request("thread-2", "preview-1"),
+                snapshot("thread-2"),
+                vec![4, 5, 6],
+            )
             .expect_err("重复预览标识必须被拒绝");
         assert_eq!(error.code, "invalidPreview");
         assert_eq!(
             registry
                 .snapshot_for_share("thread-1", "preview-1")
                 .expect("原预览不能被覆盖")
+                .0
                 .metadata
                 .source_thread_id,
             "thread-1"
@@ -412,8 +437,8 @@ fn compatible(version: &str) -> bool {
 }
 
 fn codex_version() -> Result<String, CommandError> {
-    let executable = crate::codex::executable::resolve_codex_executable()
-        .map_err(CommandError::from)?;
+    let executable =
+        crate::codex::executable::resolve_codex_executable().map_err(CommandError::from)?;
     let mut command = std::process::Command::new(executable);
     crate::codex::executable::configure_codex_command(&mut command);
     let output = command
@@ -492,17 +517,34 @@ pub async fn preview_snapshot(
     request.validate()?;
     let read_thread_id = request.thread_id.clone();
     let cutoff_turn_id = request.cutoff_turn_id.clone();
-    let snapshot = run_codex_command(&state, move |client| {
-        client
+    let (snapshot, rollout_path) = run_codex_command(&state, move |client| {
+        let snapshot = client
             .read_snapshot(&read_thread_id, cutoff_turn_id.as_deref())
-            .map_err(CommandError::from)
+            .map_err(CommandError::from)?;
+        let rollout_path = client
+            .thread_rollout_path(&read_thread_id)
+            .map_err(CommandError::from)?;
+        Ok((snapshot, rollout_path))
     })
     .await?;
     let bytes = serde_json::to_vec(&snapshot)
         .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
     let validated = validate_snapshot(&bytes)
         .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
-    state.previews.insert(&request, validated.clone())?;
+    let codex_home = native::codex_home()?;
+    let snapshot_for_bundle = validated.clone();
+    let native_bundle = tokio::task::spawn_blocking(move || {
+        native::build_bundle(
+            &codex_home,
+            std::path::Path::new(&rollout_path),
+            &snapshot_for_bundle,
+        )
+    })
+    .await
+    .map_err(|error| CommandError::new("invalidNativeBundle", error.to_string()))??;
+    state
+        .previews
+        .insert(&request, validated.clone(), native_bundle)?;
     Ok(validated)
 }
 
@@ -540,13 +582,12 @@ pub async fn start_share(
     if request.thread_id.trim().is_empty() {
         return Err(CommandError::new("threadNotFound", "请选择要分享的会话"));
     }
-    let snapshot = state
+    let (snapshot, native_bundle) = state
         .previews
         .snapshot_for_share(&request.thread_id, &request.preview_id)?;
-    let ip = request
-        .bind_ip
-        .parse()
-        .map_err(|error| CommandError::new("invalidEndpoint", format!("局域网地址无效：{error}")))?;
+    let ip = request.bind_ip.parse().map_err(|error| {
+        CommandError::new("invalidEndpoint", format!("局域网地址无效：{error}"))
+    })?;
     let invitation = state.invitations.create_with_options(
         request.thread_id.clone(),
         ip,
@@ -556,6 +597,7 @@ pub async fn start_share(
     let handle = TransferServer::serve(
         invitation.clone(),
         snapshot,
+        native_bundle,
         Arc::clone(&state.invitations),
     )
     .await
@@ -578,7 +620,10 @@ pub async fn start_share(
 }
 
 #[tauri::command]
-pub fn share_status(state: State<'_, AppState>, invitation_id: String) -> Result<String, CommandError> {
+pub fn share_status(
+    state: State<'_, AppState>,
+    invitation_id: String,
+) -> Result<String, CommandError> {
     state.remove_finished_servers();
     let invitation = state
         .invitations
@@ -687,8 +732,9 @@ pub async fn preview_share(
     request: PreviewShareRequest,
 ) -> Result<ReceivedPreview, CommandError> {
     let pairing: crate::transfer::protocol::PairingInfo =
-        serde_json::from_str(&request.pairing_info)
-            .map_err(|error| CommandError::new("invalidPairing", format!("配对信息无效：{error}")))?;
+        serde_json::from_str(&request.pairing_info).map_err(|error| {
+            CommandError::new("invalidPairing", format!("配对信息无效：{error}"))
+        })?;
     validate_received_pairing(&pairing)
         .map_err(|error| CommandError::new("invalidPairing", error))?;
     let endpoint = pairing.endpoint.clone();
@@ -703,18 +749,14 @@ pub async fn preview_share(
         .map_err(|error| CommandError::new("transferFailed", error.to_string()))?
         .map_err(|error| CommandError::new("transferFailed", error.to_string()))?;
     let share_id = proposal.metadata.share_id.clone();
-    state
-        .clients
-        .lock()
-        .expect("接收客户端锁已中毒")
-        .insert(
-            share_id.clone(),
-            crate::transfer::client::PendingTransfer {
-                client,
-                pairing,
-                proposal: proposal.clone(),
-            },
-        );
+    state.clients.lock().expect("接收客户端锁已中毒").insert(
+        share_id.clone(),
+        crate::transfer::client::PendingTransfer {
+            client,
+            pairing,
+            proposal: proposal.clone(),
+        },
+    );
     Ok(ReceivedPreview {
         share_id,
         metadata: proposal.metadata,
@@ -724,7 +766,10 @@ pub async fn preview_share(
 }
 
 #[tauri::command]
-pub async fn decline_share(state: State<'_, ReceiveState>, share_id: String) -> Result<(), CommandError> {
+pub async fn decline_share(
+    state: State<'_, ReceiveState>,
+    share_id: String,
+) -> Result<(), CommandError> {
     let pending = state
         .clients
         .lock()
@@ -774,16 +819,15 @@ pub async fn accept_share(
     if removed.is_none() {
         return Err(CommandError::new("cancelled", "下载已取消"));
     }
-    let (snapshot, progress_events) = result
+    let (bundle_bytes, progress_events) = result
         .map_err(|error| CommandError::new("transferFailed", error.to_string()))?
         .map_err(|error| CommandError::new("transferFailed", error.to_string()))?;
-    let bytes = serde_json::to_vec(&snapshot)
-        .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
-    validate_snapshot(&bytes)
-        .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
+    native::parse_bundle(&bundle_bytes)
+        .map_err(|error| CommandError::new("invalidNativeBundle", error.to_string()))?;
     let path = staging_path(&window, &share_id)?;
-    fs::write(&path, &bytes)
-        .map_err(|error| CommandError::new("stagingFailed", format!("暂存快照失败：{error}")))?;
+    fs::write(&path, &bundle_bytes).map_err(|error| {
+        CommandError::new("stagingFailed", format!("暂存原生会话包失败：{error}"))
+    })?;
     let staged = StagedSnapshot {
         share_id: share_id.clone(),
         endpoint: pairing.endpoint,
@@ -832,15 +876,21 @@ fn staging_path(
     let directory = window
         .path()
         .app_data_dir()
-        .map_err(|error| CommandError::new("stagingFailed", format!("无法定位应用数据目录：{error}")))?
+        .map_err(|error| {
+            CommandError::new("stagingFailed", format!("无法定位应用数据目录：{error}"))
+        })?
         .join("staged-snapshots");
-    fs::create_dir_all(&directory)
-        .map_err(|error| CommandError::new("stagingFailed", format!("创建暂存目录失败：{error}")))?;
-    Ok(directory.join(format!("{digest}.json")))
+    fs::create_dir_all(&directory).map_err(|error| {
+        CommandError::new("stagingFailed", format!("创建暂存目录失败：{error}"))
+    })?;
+    Ok(directory.join(format!("{digest}.agbridge")))
 }
 
 #[tauri::command]
-pub fn cancel_transfer(state: State<'_, ReceiveState>, share_id: String) -> Result<(), CommandError> {
+pub fn cancel_transfer(
+    state: State<'_, ReceiveState>,
+    share_id: String,
+) -> Result<(), CommandError> {
     let task = state
         .transfers
         .lock()
@@ -922,14 +972,16 @@ pub fn import_snapshot(
         .cloned()
         .ok_or_else(|| CommandError::new("notFound", "找不到本机暂存快照，请重新接收分享"))?;
     let snapshot_path = std::path::PathBuf::from(&staged.snapshot_path);
-    let bytes = fs::read(&snapshot_path)
-        .map_err(|error| CommandError::new("invalidSnapshot", format!("读取暂存快照失败：{error}")))?;
-    let snapshot = validate_snapshot(&bytes)
-        .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
-    let app_data_dir = window
-        .path()
-        .app_data_dir()
-        .map_err(|error| CommandError::new("databaseFailed", format!("无法定位应用数据目录：{error}")))?;
+    let bytes = fs::read(&snapshot_path).map_err(|error| {
+        CommandError::new(
+            "invalidNativeBundle",
+            format!("读取暂存原生会话包失败：{error}"),
+        )
+    })?;
+    native::parse_bundle(&bytes)?;
+    let app_data_dir = window.path().app_data_dir().map_err(|error| {
+        CommandError::new("databaseFailed", format!("无法定位应用数据目录：{error}"))
+    })?;
     validate_staged_snapshot_path(&app_data_dir, &snapshot_path, &request.share_id)?;
     let project = std::path::Path::new(&request.project_path);
     let database_path = app_data_dir.join("imports.db");
@@ -937,7 +989,7 @@ pub fn import_snapshot(
         .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
     state
         .import_service
-        .create_local_thread(&snapshot, project, &snapshot_path, &database)
+        .create_local_thread(&bytes, project, &snapshot_path, &database)
         .map_err(map_import_error)
 }
 
@@ -995,16 +1047,18 @@ pub fn retry_import_record(
     let snapshot_path = std::path::PathBuf::from(&previous.snapshot_path);
     validate_staged_snapshot_path(app_data_dir, &snapshot_path, &previous.id)?;
     let bytes = fs::read(&snapshot_path).map_err(|error| {
-        CommandError::new("invalidSnapshot", format!("读取暂存快照失败：{error}"))
+        CommandError::new(
+            "invalidNativeBundle",
+            format!("读取暂存原生会话包失败：{error}"),
+        )
     })?;
-    let snapshot = validate_snapshot(&bytes)
-        .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
+    native::parse_bundle(&bytes)?;
     database
         .mark_retried(import_id, retried_at)
         .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
     let mut record = service
         .create_local_thread(
-            &snapshot,
+            &bytes,
             std::path::Path::new(&previous.project_path),
             &snapshot_path,
             database,
@@ -1064,7 +1118,7 @@ fn validate_staged_snapshot_path(
         .unwrap_or_default();
     let canonical_root = staged_root.canonicalize().ok();
     let canonical_snapshot = snapshot_path.canonicalize().ok();
-    let expected_name = format!("{}.json", staged_snapshot_digest(share_id));
+    let expected_name = format!("{}.agbridge", staged_snapshot_digest(share_id));
     if filename.is_empty()
         || filename != expected_name
         || !matches!((canonical_root, canonical_snapshot), (Some(root), Some(path)) if path.starts_with(&root) && path != root)
@@ -1102,24 +1156,18 @@ pub fn open_import(
     if record.status != "completed" || record.local_thread_id.is_empty() {
         return Err(CommandError::new(
             "notCompleted",
-            "该导入尚未创建本机会话，请重试或复制续接提示",
+            "该导入尚未创建本机会话，请重试导入",
         ));
     }
-    if !state
-        .import_service
-        .thread_exists(&record.local_thread_id)
-    {
+    if !state.import_service.thread_exists(&record.local_thread_id) {
         return Err(CommandError::new(
             "threadMissing",
-            "本机 Codex 会话已不在公开会话列表中，请复制续接提示后手动新建会话",
+            "本机 Codex 会话尚未出现在公开会话列表中，请重启 Codex 后重试打开",
         ));
     }
     let opener = crate::imports::history::CodexOpener::default();
     opener
-        .open_thread(
-            &record.local_thread_id,
-            record.continuation_prompt.as_deref().unwrap_or_default(),
-        )
+        .open_thread(&record.local_thread_id)
         .map_err(|error| CommandError::new("openUnsupported", error.to_string()))
 }
 
@@ -1180,9 +1228,9 @@ pub async fn select_project_directory(
         .set_title("选择接收方本机项目目录")
         .pick_folder(move |selected| {
             let _ = sender.send(
-                selected.and_then(|path| path.into_path().ok()).map(|path| {
-                    path.to_string_lossy().into_owned()
-                }),
+                selected
+                    .and_then(|path| path.into_path().ok())
+                    .map(|path| path.to_string_lossy().into_owned()),
             );
         });
     receiver
@@ -1194,6 +1242,7 @@ fn map_import_error(error: ImportError) -> CommandError {
     let code = match &error {
         ImportError::InvalidProject(_) => "invalidProject",
         ImportError::PromptTooLarge | ImportError::Snapshot(_) => "invalidSnapshot",
+        ImportError::Native(_) => "invalidNativeBundle",
         ImportError::Codex(_) => "codexUnavailable",
         ImportError::Store(_) => "databaseFailed",
     };
@@ -1234,4 +1283,3 @@ mod codex_version_tests {
         assert!(message.contains("env: node: No such file"));
     }
 }
-

@@ -45,6 +45,7 @@ pub mod codex;
 pub mod commands;
 pub mod db;
 pub mod imports;
+pub mod native;
 pub mod pairing;
 pub mod process;
 pub mod snapshot;

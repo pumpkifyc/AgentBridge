@@ -19,7 +19,7 @@ const staged: StagedSnapshot = {
     warnings: ["已省略图片附件"],
     schemaVersion: 1,
   },
-  snapshotPath: "/Users/receiver/Application Support/staged.json",
+  snapshotPath: "/Users/receiver/Application Support/staged.agbridge",
   totalBytes: 2048,
   chunkCount: 1,
 };
@@ -64,12 +64,12 @@ describe("导入确认", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "确认导入" }));
 
-    expect(await screen.findByText(/已创建本机续接会话/)).toBeInTheDocument();
+    expect(await screen.findByText(/已创建本机原生会话/)).toBeInTheDocument();
     expect(screen.getByText(/local-thread-1/)).toBeInTheDocument();
     expect(screen.queryByText("修复登录")).not.toBeInTheDocument();
   });
 
-  it("创建会话失败时保留快照并展示后备提示", async () => {
+  it("创建会话失败时保留原生会话包并展示错误原因", async () => {
     mockTauri("select_project_directory", "*", "/Users/receiver/local-project");
     mockTauri(
       "import_snapshot",
@@ -83,9 +83,9 @@ describe("导入确认", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "确认导入" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("无法创建本机续接会话");
-    expect(screen.getByText(/快照仍保留在本机/)).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法创建本机原生会话");
+    expect(screen.getByText(/会话包仍保留在本机/)).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("系统找不到指定文件");
-    expect(screen.queryByText(/已创建本机续接会话/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/已创建本机原生会话/)).not.toBeInTheDocument();
   });
 });

@@ -120,7 +120,7 @@ describe("分享会话页面", () => {
 
     expect(screen.getByText("正在检查本机 Codex…")).toBeInTheDocument();
     expect(await screen.findByText("修复登录流程")).toBeInTheDocument();
-    expect(screen.queryByText("快照预览")).not.toBeInTheDocument();
+    expect(screen.queryByText("会话预览")).not.toBeInTheDocument();
     expect(calls.some((call) => call.command === "preview_snapshot")).toBe(false);
 
     await clickPreview();
@@ -137,7 +137,7 @@ describe("分享会话页面", () => {
         },
       });
     });
-    expect(await screen.findByText("快照预览")).toBeInTheDocument();
+    expect(await screen.findByText("会话预览")).toBeInTheDocument();
     expect(screen.getByText("仅作说明，接收方需选择自己的项目目录", { exact: false })).toBeInTheDocument();
     expect(screen.getByText("已省略不支持的 图片附件 内容")).toBeInTheDocument();
     expect(screen.queryByText("rm -rf /")).not.toBeInTheDocument();
@@ -178,7 +178,7 @@ describe("分享会话页面", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新检查 Codex" }));
     expect(await screen.findByRole("button", { name: "生成分享预览" })).toBeInTheDocument();
     await clickPreview();
-    expect(await screen.findByText("快照预览")).toBeInTheDocument();
+    expect(await screen.findByText("会话预览")).toBeInTheDocument();
   });
 
   it("选择另一个会话后清除旧快照，并要求重新生成预览", async () => {
@@ -211,10 +211,10 @@ describe("分享会话页面", () => {
 
     await screen.findByRole("button", { name: /修复登录流程/ });
     await clickPreview();
-    await screen.findByText("快照预览");
+    await screen.findByText("会话预览");
 
     fireEvent.click(screen.getByRole("button", { name: /补充测试/ }));
-    expect(screen.queryByText("快照预览")).not.toBeInTheDocument();
+    expect(screen.queryByText("会话预览")).not.toBeInTheDocument();
 
     await clickPreview();
     expect(await screen.findByText("补充回归测试")).toBeInTheDocument();
@@ -228,10 +228,10 @@ describe("分享会话页面", () => {
 
     await screen.findByRole("button", { name: "生成分享预览" });
     await clickPreview();
-    await screen.findByText("快照预览");
+    await screen.findByText("会话预览");
 
     fireEvent.change(screen.getByLabelText("截止轮次"), { target: { value: "turn-1" } });
-    expect(screen.queryByText("快照预览")).not.toBeInTheDocument();
+    expect(screen.queryByText("会话预览")).not.toBeInTheDocument();
     await clickPreview();
 
     await waitFor(() => {
@@ -257,7 +257,7 @@ describe("分享会话页面", () => {
 
     await screen.findByRole("button", { name: "生成分享预览" });
     await clickPreview();
-    await screen.findByText("快照预览");
+    await screen.findByText("会话预览");
 
     fireEvent.click(screen.getByRole("button", { name: "重新生成预览" }));
 
@@ -323,6 +323,6 @@ describe("分享会话页面", () => {
       .filter((call) => call.command === "cancel_preview")
       .map((call) => call.args?.previewId);
     expect(previewIds[0]).toBe(previewIds[1]);
-    expect(screen.queryByText("快照预览")).not.toBeInTheDocument();
+    expect(screen.queryByText("会话预览")).not.toBeInTheDocument();
   });
 });

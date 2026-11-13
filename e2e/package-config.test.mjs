@@ -67,7 +67,7 @@ test("中文验收文档覆盖双向真机与发布前未完成项", () => {
   ]) {
     assert.ok(acceptance.includes(item), `验收文档缺少：${item}`);
   }
-  for (const item of ["选择本机目录", "确认导入", "复制续接提示", "删除记录"]) {
+  for (const item of ["选择本机目录", "确认导入", "重启 Codex", "删除记录"]) {
     assert.ok(checklist.includes(item), `验收清单缺少步骤：${item}`);
   }
   assert.match(checklist, /C:\\Users/);

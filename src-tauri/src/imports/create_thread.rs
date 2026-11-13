@@ -1,52 +1,38 @@
-use super::{
-    ImportError, ImportRecord,
-    prompt::{MAX_PROMPT_CHARS, build_continuation_prompt},
-    store::ImportStore,
-};
+use super::{ImportError, ImportRecord, store::ImportStore};
 use crate::{
     codex::{client::CodexClient, error::CodexError},
-    snapshot::schema::SnapshotV1,
+    native::{self, NativeBundleError},
 };
 use getrandom::fill as fill_random;
-use std::{
-    path::Path,
-    time::Duration,
-};
-
-const TURN_TIMEOUT: Duration = Duration::from_secs(120);
+use std::path::{Path, PathBuf};
 
 pub trait LocalCodexClient {
-    fn start_thread(&mut self, cwd: &str) -> Result<String, ImportError>;
-    fn start_turn(
+    fn fork_thread(
         &mut self,
-        thread_id: &str,
+        source_thread_id: &str,
         cwd: &str,
-        text: &str,
-    ) -> Result<(), ImportError>;
-    fn wait_for_turn_completion(&mut self) -> Result<(), ImportError>;
+        last_turn_id: Option<&str>,
+    ) -> Result<String, ImportError>;
+    fn set_thread_name(&mut self, thread_id: &str, name: &str) -> Result<(), ImportError>;
 }
 
 struct CodexAdapter(CodexClient);
 
 impl LocalCodexClient for CodexAdapter {
-    fn start_thread(&mut self, cwd: &str) -> Result<String, ImportError> {
-        self.0.start_thread(cwd).map_err(map_codex_error)
-    }
-
-    fn start_turn(
+    fn fork_thread(
         &mut self,
-        thread_id: &str,
+        source_thread_id: &str,
         cwd: &str,
-        text: &str,
-    ) -> Result<(), ImportError> {
+        last_turn_id: Option<&str>,
+    ) -> Result<String, ImportError> {
         self.0
-            .start_turn(thread_id, cwd, text)
+            .fork_thread(source_thread_id, cwd, last_turn_id)
             .map_err(map_codex_error)
     }
 
-    fn wait_for_turn_completion(&mut self) -> Result<(), ImportError> {
+    fn set_thread_name(&mut self, thread_id: &str, name: &str) -> Result<(), ImportError> {
         self.0
-            .wait_for_turn_completion(TURN_TIMEOUT)
+            .set_thread_name(thread_id, name)
             .map_err(map_codex_error)
     }
 }
@@ -55,20 +41,24 @@ fn map_codex_error(error: CodexError) -> ImportError {
     ImportError::Codex(error.to_string())
 }
 
-pub type ClientFactory = Box<dyn Fn(&Path) -> Result<Box<dyn LocalCodexClient>, ImportError> + Send + Sync>;
+pub type ClientFactory =
+    Box<dyn Fn(&Path) -> Result<Box<dyn LocalCodexClient>, ImportError> + Send + Sync>;
 pub type RecordIdFactory = Box<dyn Fn() -> String + Send + Sync>;
 
 pub struct ImportService {
     client_factory: ClientFactory,
     record_id_factory: RecordIdFactory,
     thread_checker: Box<dyn Fn(&str) -> bool + Send + Sync>,
+    codex_home: Option<PathBuf>,
 }
 
 impl Default for ImportService {
     fn default() -> Self {
         Self {
             client_factory: Box::new(|_| {
-                Ok(Box::new(CodexAdapter(CodexClient::connect().map_err(map_codex_error)?)))
+                Ok(Box::new(CodexAdapter(
+                    CodexClient::connect().map_err(map_codex_error)?,
+                )))
             }),
             record_id_factory: Box::new(new_random_record_id),
             thread_checker: Box::new(|thread_id| {
@@ -78,6 +68,7 @@ impl Default for ImportService {
                     .flatten()
                     .is_some()
             }),
+            codex_home: None,
         }
     }
 }
@@ -97,7 +88,13 @@ impl ImportService {
             client_factory,
             record_id_factory,
             thread_checker: Box::new(|_| true),
+            codex_home: None,
         }
+    }
+
+    pub fn with_codex_home(mut self, codex_home: impl Into<PathBuf>) -> Self {
+        self.codex_home = Some(codex_home.into());
+        self
     }
 
     pub fn with_thread_checker(
@@ -118,62 +115,79 @@ impl ImportService {
 
     pub fn create_local_thread(
         &self,
-        snapshot: &SnapshotV1,
+        bundle_bytes: &[u8],
         project_path: &Path,
-        snapshot_path: &Path,
+        bundle_path: &Path,
         store: &dyn ImportStore,
     ) -> Result<ImportRecord, ImportError> {
+        let bundle = native::parse_bundle(bundle_bytes).map_err(map_native_error)?;
         if !project_path.is_dir() {
-            return Err(ImportError::InvalidProject("请选择接收方电脑上存在的项目目录".into()));
+            return Err(ImportError::InvalidProject(
+                "请选择接收方电脑上存在的项目目录".into(),
+            ));
         }
         let project = project_path.to_string_lossy().into_owned();
-        let source_path = snapshot
-            .metadata
+        let source_path = bundle
+            .manifest
             .source_working_directory
             .as_deref()
             .unwrap_or_default();
         if !source_path.is_empty()
-            && (project == source_path
-                || Path::new(&project).ends_with(Path::new(source_path)))
+            && (project == source_path || Path::new(&project).ends_with(Path::new(source_path)))
         {
             return Err(ImportError::InvalidProject(
                 "分享方工作目录只作说明，请选择接收方自己的项目目录".into(),
             ));
         }
-        if project_path == snapshot_path {
+        if project_path == bundle_path {
             return Err(ImportError::InvalidProject(
-                "请选择接收方自己的项目目录，不能使用暂存快照文件".into(),
+                "请选择接收方自己的项目目录，不能使用暂存会话包".into(),
             ));
-        }
-        let prompt = build_continuation_prompt(snapshot);
-        if prompt.chars().count() > MAX_PROMPT_CHARS {
-            return Err(ImportError::PromptTooLarge);
         }
         let id = self.new_record_id();
         let imported_at = crate::pairing::invitation::unix_seconds();
         let mut record = ImportRecord {
             id,
-            source_title: snapshot.metadata.title.clone(),
+            source_title: bundle.manifest.title.clone(),
             local_thread_id: String::new(),
             project_path: project.clone(),
             imported_at,
-            snapshot_path: snapshot_path.to_string_lossy().into_owned(),
+            snapshot_path: bundle_path.to_string_lossy().into_owned(),
             status: "pending".into(),
             error: None,
-            continuation_prompt: Some(prompt.clone()),
+            continuation_prompt: None,
             retry_count: 0,
             last_retried_at: None,
         };
         store.upsert(&record).map_err(map_store_error)?;
 
         let result = (|| {
+            let codex_home = self
+                .codex_home
+                .clone()
+                .map(Ok)
+                .unwrap_or_else(native::codex_home)
+                .map_err(map_native_error)?;
+            native::install_bundle(&codex_home, &bundle).map_err(map_native_error)?;
             let mut client = (self.client_factory)(project_path)?;
-            let thread_id = client.start_thread(&project)?;
-            if thread_id == snapshot.metadata.source_thread_id || thread_id.is_empty() {
-                return Err(ImportError::Codex("本机 thread ID 无效或与源会话冲突".into()));
+            let thread_id = client.fork_thread(
+                &bundle.manifest.source_thread_id,
+                &project,
+                bundle.manifest.cutoff_turn_id.as_deref(),
+            )?;
+            if thread_id == bundle.manifest.source_thread_id || thread_id.is_empty() {
+                return Err(ImportError::Codex(
+                    "本机 thread ID 无效或与源会话冲突".into(),
+                ));
             }
-            client.start_turn(&thread_id, &project, &prompt)?;
-            client.wait_for_turn_completion()?;
+            client.set_thread_name(&thread_id, &bundle.manifest.title)?;
+            native::make_thread_visible(
+                &codex_home,
+                &thread_id,
+                &bundle.manifest.title,
+                &bundle.manifest.preview,
+            )
+            .map_err(map_native_error)?;
             Ok(thread_id)
         })();
         match result {
@@ -196,4 +210,8 @@ impl ImportService {
 
 fn map_store_error(error: super::store::StoreError) -> ImportError {
     ImportError::Store(error.to_string())
+}
+
+fn map_native_error(error: NativeBundleError) -> ImportError {
+    ImportError::Native(error.to_string())
 }

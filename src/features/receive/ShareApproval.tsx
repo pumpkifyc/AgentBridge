@@ -29,18 +29,21 @@ export function ShareApproval({ preview, busy, onAccept, onDecline }: Props) {
         <dd>{metadata.messageCount} 条消息</dd>
         <dt>截止轮次</dt>
         <dd>{metadata.cutoffTurnId || "最近一个已完成轮次"}</dd>
-        <dt>快照大小</dt>
+        <dt>原生会话包大小</dt>
         <dd>{preview.totalBytes.toLocaleString()} 字节</dd>
       </dl>
       {metadata.warnings.length > 0 && (
         <div className="warnings" role="status">
-          <strong>内容限制</strong>
+          <strong>预览说明</strong>
           <ul>
             {metadata.warnings.map((warning) => <li key={warning}>{warning}</li>)}
           </ul>
         </div>
       )}
-      <p className="hint">接受后只会下载并暂存快照；选择本地项目并按下“导入”后才会创建 Codex 会话。</p>
+      <p className="hint">
+        接受后会下载并校验完整原生会话包；选择本地项目并按下“导入”后，才会写入本机 Codex 历史。
+        原生包包含原始会话内容，可能含工具输出、文件路径或其他敏感信息。
+      </p>
       <div className="action-row">
         <button type="button" className="primary-action" disabled={busy} onClick={onAccept}>
           接受并下载

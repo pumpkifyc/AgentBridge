@@ -6,6 +6,7 @@ use super::{
     },
 };
 use crate::{
+    native::{self, NativeBundleError},
     pairing::{Invitation, InvitationManager, InvitationState},
     snapshot::schema::SnapshotV1,
 };
@@ -15,7 +16,10 @@ use rustls::{
 };
 use std::{
     net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -91,8 +95,8 @@ pub enum TransferServerError {
     MissingCertificate,
     #[error("TLS 配置错误：{0}")]
     Tls(String),
-    #[error("快照无法序列化：{0}")]
-    Encode(String),
+    #[error("原生会话包无效：{0}")]
+    Native(#[from] NativeBundleError),
     #[error("分享状态错误：{0}")]
     Invitation(String),
 }
@@ -103,8 +107,10 @@ impl TransferServer {
     pub async fn serve(
         invitation: Invitation,
         snapshot: SnapshotV1,
+        native_bundle: Vec<u8>,
         manager: Arc<InvitationManager>,
     ) -> Result<TransferServerHandle, TransferServerError> {
+        native::parse_bundle(&native_bundle)?;
         let bind_ip: IpAddr = invitation
             .bind_ip
             .parse::<IpAddr>()
@@ -128,10 +134,7 @@ impl TransferServer {
             )
             .map_err(|error| TransferServerError::Tls(error.to_string()))?;
         let acceptor = TlsAcceptor::from(Arc::new(config));
-        let bytes = Arc::new(
-            serde_json::to_vec(&snapshot)
-                .map_err(|error| TransferServerError::Encode(error.to_string()))?,
-        );
+        let bytes = Arc::new(native_bundle);
         let metadata = ShareMetadata::from_snapshot(&invitation.id, &snapshot);
         let failed_auths = Arc::new(Mutex::new(0usize));
         let consumed = Arc::new(AtomicBool::new(false));
@@ -261,11 +264,7 @@ impl TransferServer {
                     }
                 }
             }
-            for handle in active_transfers
-                .lock()
-                .expect("传输任务锁已中毒")
-                .iter()
-            {
+            for handle in active_transfers.lock().expect("传输任务锁已中毒").iter() {
                 handle.abort();
             }
         });
@@ -352,11 +351,8 @@ async fn handle_connection(
         };
         // 拒绝后等待对端先关闭连接，避免 TCP RST 抢在错误行被读取之前到达。
         let mut discarded = String::new();
-        let _ = tokio::time::timeout(
-            Duration::from_millis(200),
-            reader.read_line(&mut discarded),
-        )
-        .await;
+        let _ = tokio::time::timeout(Duration::from_millis(200), reader.read_line(&mut discarded))
+            .await;
         let _ = send(
             &mut writer,
             &ServerMessage::Error {
@@ -443,7 +439,8 @@ async fn handle_connection(
             return Ok(());
         }
         let ack = serde_json::from_str::<ClientMessage>(&line);
-        if !matches!(ack, Ok(ClientMessage::ChunkAck { index: ack_index }) if ack_index as usize == index) {
+        if !matches!(ack, Ok(ClientMessage::ChunkAck { index: ack_index }) if ack_index as usize == index)
+        {
             manager.set_state(&invitation.id, InvitationState::Failed);
             let _ = send(
                 &mut writer,

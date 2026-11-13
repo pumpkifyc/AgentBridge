@@ -42,7 +42,7 @@ describe("导入历史页面", () => {
     expect(screen.queryByText("请执行历史工具调用")).not.toBeInTheDocument();
   });
 
-  it("失败记录可重试，成功记录可打开并有续接提示后备方案", async () => {
+  it("失败记录可重试，成功记录可打开并在自动打开失败时给出历史列表提示", async () => {
     mockTauri("list_imports", "*", records);
     mockTauri("retry_import", { importId: "import-2" }, {
       id: "import-2",
@@ -61,17 +61,17 @@ describe("导入历史页面", () => {
     expect(await screen.findByText("重试已完成")).toBeInTheDocument();
 
     fireEvent.click(screen.getAllByRole("button", { name: "打开会话" })[0]);
-    expect(await screen.findByRole("alert")).toHaveTextContent("请复制续接提示");
+    expect(await screen.findByRole("alert")).toHaveTextContent("请重启 Codex");
   });
 
-  it("删除记录前要求确认，并说明本机快照会被移除", async () => {
+  it("删除记录前要求确认，并说明暂存原生会话包会被移除", async () => {
     mockTauri("list_imports", "*", records);
     mockTauri("delete_import", "*", undefined);
     render(<HistoryPage />);
 
     await screen.findByText("修复登录流程");
     fireEvent.click(screen.getAllByRole("button", { name: "删除记录" })[0]);
-    expect(screen.getByRole("dialog")).toHaveTextContent("本机暂存快照");
+    expect(screen.getByRole("dialog")).toHaveTextContent("暂存原生会话包");
     fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();

@@ -44,7 +44,7 @@ export function ConversationPreview({ snapshot, loading, error }: Props) {
   }, [snapshot, visibleMessageCount]);
 
   if (loading) {
-    return <p className="notice">正在读取会话快照…</p>;
+    return <p className="notice">正在读取会话历史…</p>;
   }
   if (error) {
     return <p className="notice error" role="alert">{error}</p>;
@@ -73,7 +73,7 @@ export function ConversationPreview({ snapshot, loading, error }: Props) {
   return (
     <section className="panel conversation-preview" aria-labelledby="conversation-preview-title">
       <div className="panel-heading">
-        <h2 id="conversation-preview-title">快照预览</h2>
+        <h2 id="conversation-preview-title">会话预览</h2>
         <span>{snapshot.messages.length} 条消息 · 默认显示最新</span>
       </div>
       <dl className="metadata-grid">
@@ -88,7 +88,7 @@ export function ConversationPreview({ snapshot, loading, error }: Props) {
       </dl>
       {snapshot.warnings.length > 0 && (
         <div className="warnings" role="status">
-          <strong>内容限制</strong>
+          <strong>预览说明</strong>
           <ul>{snapshot.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
         </div>
       )}
@@ -101,7 +101,7 @@ export function ConversationPreview({ snapshot, loading, error }: Props) {
           显示更早的 {nextMessageCount} 条（还有 {remainingMessageCount} 条）
         </button>
       )}
-      <ol ref={messageListRef} className="message-list" aria-label="快照消息列表">
+      <ol ref={messageListRef} className="message-list" aria-label="会话消息列表">
         {visibleMessages.map((message, index) => (
           <li
             key={`${message.turnIndex}-${index}`}

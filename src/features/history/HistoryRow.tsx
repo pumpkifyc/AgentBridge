@@ -4,7 +4,6 @@ interface Props {
   record: ImportRecord;
   onOpen: (record: ImportRecord) => void;
   onRetry: (record: ImportRecord) => void;
-  onCopyPrompt: (record: ImportRecord) => void;
   onDelete: (record: ImportRecord) => void;
 }
 
@@ -18,7 +17,6 @@ export function HistoryRow({
   record,
   onOpen,
   onRetry,
-  onCopyPrompt,
   onDelete,
 }: Props) {
   return (
@@ -42,9 +40,6 @@ export function HistoryRow({
             重试导入
           </button>
         )}
-        <button type="button" className="secondary-action" onClick={() => onCopyPrompt(record)}>
-          复制续接提示
-        </button>
         <button type="button" className="secondary-action" onClick={() => onDelete(record)}>
           删除记录
         </button>

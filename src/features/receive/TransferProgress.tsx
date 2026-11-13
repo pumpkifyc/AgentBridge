@@ -17,7 +17,7 @@ export function TransferProgress({ progress }: Props) {
     : Math.min(100, Math.round((progress.transferredBytes / progress.totalBytes) * 100));
   return (
     <div className="transfer-progress" role="status">
-      <strong>正在接收快照…</strong>
+      <strong>正在接收原生会话包…</strong>
       <progress value={percentage} max={100} aria-valuenow={percentage} />
       <span>{formatBytes(progress.transferredBytes)} / {formatBytes(progress.totalBytes)}</span>
     </div>

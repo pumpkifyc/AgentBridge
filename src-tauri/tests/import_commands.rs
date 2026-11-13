@@ -1,13 +1,9 @@
 use agentbridge_lib::{
     commands::{delete_import_files, retry_import_record},
     db::ImportDatabase,
-    imports::{
-        ImportRecord, ImportService,
-        create_thread::LocalCodexClient,
-    },
-    snapshot::{
-        schema::{MessageRole, SnapshotMessage, SnapshotMetadata, SnapshotV1},
-    },
+    imports::{ImportRecord, ImportService, create_thread::LocalCodexClient},
+    native,
+    snapshot::schema::{MessageRole, SnapshotMessage, SnapshotMetadata, SnapshotV1},
 };
 use std::{
     fs,
@@ -85,23 +81,25 @@ struct FakeCodexClient {
 }
 
 impl LocalCodexClient for FakeCodexClient {
-    fn start_thread(&mut self, _cwd: &str) -> Result<String, agentbridge_lib::imports::ImportError> {
+    fn fork_thread(
+        &mut self,
+        _source_thread_id: &str,
+        _cwd: &str,
+        _last_turn_id: Option<&str>,
+    ) -> Result<String, agentbridge_lib::imports::ImportError> {
         if self.fail {
-            return Err(agentbridge_lib::imports::ImportError::Codex("Codex 不可用".into()));
+            return Err(agentbridge_lib::imports::ImportError::Codex(
+                "Codex 不可用".into(),
+            ));
         }
         Ok("new-local-thread".into())
     }
 
-    fn start_turn(
+    fn set_thread_name(
         &mut self,
         _thread_id: &str,
-        _cwd: &str,
-        _text: &str,
+        _name: &str,
     ) -> Result<(), agentbridge_lib::imports::ImportError> {
-        Ok(())
-    }
-
-    fn wait_for_turn_completion(&mut self) -> Result<(), agentbridge_lib::imports::ImportError> {
         Ok(())
     }
 }
@@ -111,13 +109,16 @@ fn retrying_a_completed_import_is_rejected_before_starting_codex() {
     let dir = unique_dir("completed-retry");
     let project = dir.join("receiver-project");
     let staged = dir.join("staged-snapshots").join(format!(
-        "{}.json",
+        "{}.agbridge",
         agentbridge_lib::commands::staged_snapshot_digest("import-completed")
     ));
     fs::create_dir_all(&project).expect("创建接收方项目");
     fs::create_dir_all(staged.parent().expect("暂存目录")).expect("创建暂存目录");
-    fs::write(&staged, serde_json::to_vec(&snapshot()).expect("快照可序列化"))
-        .expect("写入暂存快照");
+    fs::write(
+        &staged,
+        serde_json::to_vec(&snapshot()).expect("快照可序列化"),
+    )
+    .expect("写入暂存快照");
     let database = ImportDatabase::open(dir.join("imports.db")).expect("数据库可打开");
     database
         .upsert(&completed_record(
@@ -140,7 +141,11 @@ fn retrying_a_completed_import_is_rejected_before_starting_codex() {
         .expect_err("已完成导入不能再创建 thread");
 
     assert_eq!(error.code, "notRetryable");
-    assert!(error.message.contains("已完成"), "应说明拒绝原因：{}", error.message);
+    assert!(
+        error.message.contains("已完成"),
+        "应说明拒绝原因：{}",
+        error.message
+    );
     assert_eq!(starts.load(Ordering::SeqCst), 0, "不能启动 Codex");
     let records = database.list().expect("可列出导入记录");
     assert_eq!(records.len(), 1);
@@ -154,32 +159,39 @@ fn importing_a_staged_snapshot_checks_its_filename_and_staging_directory() {
     let dir = unique_dir("staging-validation");
     let staged_dir = dir.join("staged-snapshots");
     fs::create_dir_all(&staged_dir).expect("创建暂存目录");
-    let outside = dir.join("outside.json");
-    fs::write(&outside, serde_json::to_vec(&snapshot()).expect("快照可序列化"))
-        .expect("写入目录外快照");
-    let wrong_name = staged_dir.join("wrong.json");
-    fs::write(&wrong_name, serde_json::to_vec(&snapshot()).expect("快照可序列化"))
-        .expect("写入文件名不匹配的快照");
+    let outside = dir.join("outside.agbridge");
+    fs::write(
+        &outside,
+        serde_json::to_vec(&snapshot()).expect("快照可序列化"),
+    )
+    .expect("写入目录外快照");
+    let wrong_name = staged_dir.join("wrong.agbridge");
+    fs::write(
+        &wrong_name,
+        serde_json::to_vec(&snapshot()).expect("快照可序列化"),
+    )
+    .expect("写入文件名不匹配的快照");
 
     assert_eq!(
-        agentbridge_lib::commands::validate_staged_snapshot_path_for_test(
-            &dir,
-            &outside,
-        ).expect_err("目录外快照必须被拒绝").code,
+        agentbridge_lib::commands::validate_staged_snapshot_path_for_test(&dir, &outside,)
+            .expect_err("目录外快照必须被拒绝")
+            .code,
         "invalidSnapshot"
     );
     assert_eq!(
-        agentbridge_lib::commands::validate_staged_snapshot_path_for_test(
-            &dir,
-            &wrong_name,
-        ).expect_err("文件名不匹配的快照必须被拒绝").code,
+        agentbridge_lib::commands::validate_staged_snapshot_path_for_test(&dir, &wrong_name,)
+            .expect_err("文件名不匹配的快照必须被拒绝")
+            .code,
         "invalidSnapshot"
     );
 
     let digest = agentbridge_lib::commands::staged_snapshot_digest("share-1");
-    let valid = staged_dir.join(format!("{digest}.json"));
-    fs::write(&valid, serde_json::to_vec(&snapshot()).expect("快照可序列化"))
-        .expect("写入有效暂存快照");
+    let valid = staged_dir.join(format!("{digest}.agbridge"));
+    fs::write(
+        &valid,
+        serde_json::to_vec(&snapshot()).expect("快照可序列化"),
+    )
+    .expect("写入有效暂存快照");
     agentbridge_lib::commands::validate_staged_snapshot_path_for_test(&dir, &valid)
         .expect("有效暂存路径应通过检查");
     fs::remove_dir_all(&dir).expect("清理测试目录");
@@ -190,13 +202,14 @@ fn retrying_a_failed_import_keeps_one_record_and_updates_retry_metadata() {
     let dir = unique_dir("failed-retry");
     let project = dir.join("receiver-project");
     let staged = dir.join("staged-snapshots").join(format!(
-        "{}.json",
+        "{}.agbridge",
         agentbridge_lib::commands::staged_snapshot_digest("import-failed")
     ));
     fs::create_dir_all(&project).expect("创建接收方项目");
     fs::create_dir_all(staged.parent().expect("暂存目录")).expect("创建暂存目录");
-    fs::write(&staged, serde_json::to_vec(&snapshot()).expect("快照可序列化"))
-        .expect("写入暂存快照");
+    let codex_home = dir.join("codex-home");
+    let bundle = build_native_bundle(&codex_home, &snapshot());
+    fs::write(&staged, bundle).expect("写入暂存原生会话包");
     let database = ImportDatabase::open(dir.join("imports.db")).expect("数据库可打开");
     database
         .upsert(&failed_record(
@@ -207,11 +220,10 @@ fn retrying_a_failed_import_keeps_one_record_and_updates_retry_metadata() {
         ))
         .expect("保存失败记录");
     let service = ImportService::with_client_factory(
-        Box::new(|_| {
-            Ok(Box::new(FakeCodexClient { fail: true }) as Box<dyn LocalCodexClient>)
-        }),
+        Box::new(|_| Ok(Box::new(FakeCodexClient { fail: true }) as Box<dyn LocalCodexClient>)),
         Box::new(|| "unexpected-new-id".into()),
-    );
+    )
+    .with_codex_home(codex_home);
 
     let error = retry_import_record(&service, &database, &dir, "import-failed", 1_800_000_300)
         .expect_err("Codex 不可用时应报告失败");
@@ -237,6 +249,24 @@ fn retrying_a_failed_import_keeps_one_record_and_updates_retry_metadata() {
     fs::remove_dir_all(&dir).expect("清理测试目录");
 }
 
+fn build_native_bundle(codex_home: &std::path::Path, snapshot: &SnapshotV1) -> Vec<u8> {
+    let sessions = codex_home.join("sessions/2026/11/13");
+    fs::create_dir_all(&sessions).expect("创建测试 CODEX_HOME");
+    let rollout = sessions.join(format!(
+        "rollout-2026-11-13T00-00-00-{}.jsonl",
+        snapshot.metadata.source_thread_id
+    ));
+    fs::write(
+        &rollout,
+        format!(
+            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{}\",\"session_id\":\"{}\"}}}}\n",
+            snapshot.metadata.source_thread_id, snapshot.metadata.source_thread_id
+        ),
+    )
+    .expect("写入测试 rollout");
+    native::build_bundle(codex_home, &rollout, snapshot).expect("构建原生会话包")
+}
+
 #[test]
 fn delete_import_command_removes_the_staged_snapshot_inside_app_data_only() {
     let dir = unique_dir("command-delete");
@@ -252,13 +282,20 @@ fn delete_import_command_removes_the_staged_snapshot_inside_app_data_only() {
         ("import-outside", outside.to_string_lossy().into_owned()),
     ] {
         database
-            .upsert(&completed_record(id, &dir.to_string_lossy(), &snapshot_path))
+            .upsert(&completed_record(
+                id,
+                &dir.to_string_lossy(),
+                &snapshot_path,
+            ))
             .expect("保存导入记录");
     }
     let staged_entries: Mutex<std::collections::HashMap<String, String>> = Mutex::new(
-        [("import-inside".to_owned(), staged.to_string_lossy().into_owned())]
-            .into_iter()
-            .collect(),
+        [(
+            "import-inside".to_owned(),
+            staged.to_string_lossy().into_owned(),
+        )]
+        .into_iter()
+        .collect(),
     );
 
     delete_import_files(&database, &dir, "import-inside", |snapshot_path| {
@@ -300,8 +337,7 @@ fn delete_import_command_refuses_staged_paths_that_escape_the_app_data_directory
         ))
         .expect("保存导入记录");
 
-    delete_import_files(&database, &dir, "import-traversal", |_| {})
-        .expect("记录仍应可删除");
+    delete_import_files(&database, &dir, "import-traversal", |_| {}).expect("记录仍应可删除");
 
     assert!(outside.exists(), "不能通过 .. 删除暂存目录外的文件");
     assert!(database.list().expect("可列出记录").is_empty());

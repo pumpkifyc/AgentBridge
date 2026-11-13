@@ -64,7 +64,10 @@ fn snapshot_wire_format_uses_the_camel_case_fields_expected_by_the_ui() {
         "turn_index",
         "historical_tool_summary",
     ] {
-        assert!(!wire.to_string().contains(legacy), "序列化结果仍包含 {legacy}");
+        assert!(
+            !wire.to_string().contains(legacy),
+            "序列化结果仍包含 {legacy}"
+        );
     }
     assert_eq!(
         validate_snapshot(&bytes).expect("应接受当前 wire 格式"),
@@ -99,10 +102,7 @@ fn pagination_wire_format_uses_next_cursor() {
 fn share_status_reader_reports_terminal_states_without_an_error() {
     let manager = InvitationManager::new();
     let invitation = manager.create("snapshot-1");
-    assert_eq!(
-        manager.status(&invitation.id),
-        Ok(InvitationState::Waiting)
-    );
+    assert_eq!(manager.status(&invitation.id), Ok(InvitationState::Waiting));
     for state in [
         InvitationState::Paired,
         InvitationState::Previewed,
@@ -117,13 +117,15 @@ fn share_status_reader_reports_terminal_states_without_an_error() {
         manager.set_state(&invitation.id, state);
         assert_eq!(manager.status(&invitation.id), Ok(state));
     }
-    assert!(manager
-        .get(&invitation.id)
-        .is_ok(), "失败状态在有效期内仍允许明确重试");
+    assert!(
+        manager.get(&invitation.id).is_ok(),
+        "失败状态在有效期内仍允许明确重试"
+    );
     manager.set_state(&invitation.id, InvitationState::Accepted);
-    assert!(manager
-        .get(&invitation.id)
-        .is_err(), "传输完成仍必须拒绝重放");
+    assert!(
+        manager.get(&invitation.id).is_err(),
+        "传输完成仍必须拒绝重放"
+    );
 }
 
 #[test]

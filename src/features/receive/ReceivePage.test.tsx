@@ -35,7 +35,7 @@ const staged: StagedSnapshot = {
   endpoint: "192.168.1.20:49152",
   fingerprint: `sha256:${"a".repeat(64)}`,
   metadata: preview.metadata,
-  snapshotPath: "/Users/receiver/Library/Application Support/AgentBridge/share-1.json",
+  snapshotPath: "/Users/receiver/Library/Application Support/AgentBridge/share-1.agbridge",
   totalBytes: 2048,
   chunkCount: 1,
 };
@@ -109,11 +109,11 @@ describe("接收会话页面", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "接受并下载" }));
 
-    expect(await screen.findByText("快照已暂存，等待选择本地项目后导入")).toBeInTheDocument();
+    expect(await screen.findByText("原生会话包已暂存，等待选择本地项目后导入")).toBeInTheDocument();
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
     expect(screen.getByText("2.0 KB / 2.0 KB")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "创建 Codex 会话" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "删除暂存快照" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除暂存会话包" })).toBeInTheDocument();
   });
 
   it("下载中断后保留配对信息，允许明确重试", async () => {
@@ -131,7 +131,7 @@ describe("接收会话页面", () => {
     expect(screen.queryByText("share-secret-value")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "重试下载" }));
-    expect(await screen.findByText("快照已暂存，等待选择本地项目后导入")).toBeInTheDocument();
+    expect(await screen.findByText("原生会话包已暂存，等待选择本地项目后导入")).toBeInTheDocument();
   });
 
   it("下载中可取消，取消后不把中断快照标记为成功", async () => {
@@ -152,11 +152,11 @@ describe("接收会话页面", () => {
     expect(await screen.findByText("下载已取消")).toBeInTheDocument();
     resolveAccept(staged);
     await waitFor(() => {
-      expect(screen.queryByText("快照已暂存，等待选择本地项目后导入")).not.toBeInTheDocument();
+      expect(screen.queryByText("原生会话包已暂存，等待选择本地项目后导入")).not.toBeInTheDocument();
     });
   });
 
-  it("删除暂存快照会移除本机文件与记录，且错误不含凭据", async () => {
+  it("删除暂存原生会话包会移除本机文件与记录，且错误不含凭据", async () => {
     mockTauri("preview_share", "*", preview);
     mockTauri("accept_share", { shareId: "share-1" }, staged);
     mockTauri("delete_staged_snapshot", { shareId: "share-1" }, undefined);
@@ -165,12 +165,12 @@ describe("接收会话页面", () => {
     fireEvent.click(screen.getByRole("button", { name: "预览分享" }));
     await screen.findByText("修复登录流程");
     fireEvent.click(screen.getByRole("button", { name: "接受并下载" }));
-    await screen.findByText("快照已暂存，等待选择本地项目后导入");
+    await screen.findByText("原生会话包已暂存，等待选择本地项目后导入");
 
-    fireEvent.click(screen.getByRole("button", { name: "删除暂存快照" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除暂存会话包" }));
 
-    expect(await screen.findByText("已删除本机暂存快照")).toBeInTheDocument();
-    expect(screen.queryByText("快照已暂存，等待选择本地项目后导入")).not.toBeInTheDocument();
+    expect(await screen.findByText("已删除本机暂存原生会话包")).toBeInTheDocument();
+    expect(screen.queryByText("原生会话包已暂存，等待选择本地项目后导入")).not.toBeInTheDocument();
     expect(console.error).not.toHaveBeenCalled();
     expect(console.warn).not.toHaveBeenCalled();
   });

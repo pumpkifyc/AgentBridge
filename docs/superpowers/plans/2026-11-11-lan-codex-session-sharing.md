@@ -1,5 +1,7 @@
 # AgentBridge 局域网 Codex 会话分享实施计划
 
+> 历史计划说明：本文记录第一版开发时的“合成历史提示”方案。2026-11-13 已改为复制 Codex 原始 rollout 并通过公开 `thread/fork` 创建原生会话；当前实现与限制以 [原生会话包与导入机制](../../native-session-import.md) 为准。
+
 > **供自动化执行者使用：** 实施时必须按任务逐项执行本计划。建议使用 `superpowers:subagent-driven-development` 子技能，或使用 `superpowers:executing-plans` 子技能。请用复选框（`- [ ]`）跟踪步骤。
 
 **目标：** 构建一款 macOS 和 Windows 版 AgentBridge 应用，让用户通过经过配对的局域网连接传输明确选定的 Codex 会话，并在接收方本机创建独立的 Codex 续接会话。

@@ -37,18 +37,7 @@ export function HistoryPage() {
       await historyApi.open(record.id);
       setError(null);
     } catch {
-      setError("当前 Codex 桌面版无法通过公开接口打开该会话。请复制续接提示，在 Codex 中新建会话后粘贴。");
-    }
-  }
-
-  async function copyPrompt(record: ImportRecord) {
-    try {
-      const prompt = await historyApi.copyPrompt(record.id);
-      await navigator.clipboard.writeText(prompt);
-      setNotice("续接提示已复制到剪贴板");
-      setError(null);
-    } catch {
-      setError("无法复制续接提示，请检查系统剪贴板权限，或先重试失败的导入。");
+      setError("当前 Codex 桌面版无法自动打开该会话。请重启 Codex，并在历史列表中查找该会话。");
     }
   }
 
@@ -84,14 +73,13 @@ export function HistoryPage() {
             record={record}
             onOpen={(item) => void open(item)}
             onRetry={(item) => void retry(item)}
-            onCopyPrompt={(item) => void copyPrompt(item)}
             onDelete={setPendingDelete}
           />
         ))}
       </ul>
       {pendingDelete && (
         <div className="notice" role="dialog" aria-label="确认删除导入记录">
-          <p>删除「{pendingDelete.sourceTitle}」的本机导入记录和本机暂存快照？Codex 会话不会被删除。</p>
+          <p>删除「{pendingDelete.sourceTitle}」的本机导入记录和暂存原生会话包？Codex 会话不会被删除。</p>
           <div className="action-row">
             <button type="button" className="primary-action" onClick={() => void remove()}>确认删除</button>
             <button type="button" className="secondary-action" onClick={() => setPendingDelete(null)}>取消</button>

@@ -1,15 +1,11 @@
 use agentbridge_lib::{
     db::ImportDatabase,
     imports::{
-        ImportError, ImportRecord, ImportService,
-        create_thread::LocalCodexClient,
-        history::CodexOpener,
-        prompt::build_continuation_prompt,
+        ImportError, ImportRecord, ImportService, create_thread::LocalCodexClient,
+        history::CodexOpener, prompt::build_continuation_prompt,
     },
-    snapshot::{
-        schema::{MessageRole, SnapshotMessage, SnapshotMetadata, SnapshotV1},
-        validate::validate_snapshot,
-    },
+    native,
+    snapshot::schema::{MessageRole, SnapshotMessage, SnapshotMetadata, SnapshotV1},
 };
 use std::{
     collections::HashSet,
@@ -75,9 +71,7 @@ fn continuation_prompt_marks_external_history_as_untrusted_and_keeps_text() {
     assert!(prompt.contains("历史助手"));
     assert!(prompt.contains("历史工具结果"));
     assert!(!prompt.contains("/home/alice/project"));
-    assert!(
-        prompt.chars().count() <= agentbridge_lib::imports::prompt::MAX_PROMPT_CHARS
-    );
+    assert!(prompt.chars().count() <= agentbridge_lib::imports::prompt::MAX_PROMPT_CHARS);
     fs::remove_dir_all(&dir).expect("清理测试目录");
 }
 
@@ -102,9 +96,7 @@ fn continuation_prompt_truncates_oversized_history_but_keeps_the_untrusted_wrapp
         historical_tool_summary: None,
     });
     let prompt = build_continuation_prompt(&oversized);
-    assert!(
-        prompt.chars().count() <= agentbridge_lib::imports::prompt::MAX_PROMPT_CHARS
-    );
+    assert!(prompt.chars().count() <= agentbridge_lib::imports::prompt::MAX_PROMPT_CHARS);
     assert!(prompt.starts_with("以下是由 AgentBridge 导入"));
     assert!(prompt.contains("历史内容因大小限制截断"));
     assert!(prompt.contains("历史引用区结束"));
@@ -128,9 +120,7 @@ fn continuation_prompt_keeps_the_tail_of_one_oversized_latest_message() {
 
     let prompt = build_continuation_prompt(&oversized);
 
-    assert!(
-        prompt.chars().count() <= agentbridge_lib::imports::prompt::MAX_PROMPT_CHARS
-    );
+    assert!(prompt.chars().count() <= agentbridge_lib::imports::prompt::MAX_PROMPT_CHARS);
     assert!(prompt.contains("最新历史消息过长"));
     assert!(prompt.contains("最新历史尾部"));
     assert!(prompt.contains("历史引用区结束"));
@@ -141,31 +131,22 @@ fn creates_a_new_thread_in_the_receiver_project_and_persists_an_import_record() 
     let dir = unique_dir("service");
     let project = dir.join("receiver-project");
     fs::create_dir_all(&project).expect("创建接收方项目");
-    let snapshot_file = dir.join("staged.json");
-    let snapshot = snapshot();
-    fs::write(
-        &snapshot_file,
-        serde_json::to_vec(&snapshot).expect("快照可序列化"),
-    )
-    .expect("写入暂存快照");
+    let (bundle_file, bundle, codex_home) = write_native_bundle(&dir);
     let database = ImportDatabase::open(dir.join("imports.db")).expect("数据库可打开");
     let service = ImportService::with_client_factory(
         Box::new(|_| {
             Ok(Box::new(FakeCodexClient {
+                source_thread_id: None,
                 cwd: None,
-                prompt: None,
+                name: None,
                 fail: false,
             }))
         }),
         Box::new(|| "local-thread-generated".to_owned()),
-    );
+    )
+    .with_codex_home(codex_home);
     let record = service
-        .create_local_thread(
-            &read_staged(&snapshot_file).expect("读取暂存快照"),
-            &project,
-            &snapshot_file,
-            &database,
-        )
+        .create_local_thread(&bundle, &project, &bundle_file, &database)
         .expect("应创建本机续接会话");
     assert_ne!(record.local_thread_id, "source-thread");
     assert_eq!(record.project_path, project.to_string_lossy());
@@ -185,49 +166,45 @@ fn default_import_service_gives_each_local_record_a_unique_random_id() {
     assert_eq!(ids.len(), 2, "连续生成的记录 ID 必须各不相同");
     assert!(
         ids.iter().all(|id| {
-            id.strip_prefix("import-")
-                .is_some_and(|value| value.len() == 32
-                    && value.chars().all(|character| character.is_ascii_hexdigit()))
+            id.strip_prefix("import-").is_some_and(|value| {
+                value.len() == 32 && value.chars().all(|character| character.is_ascii_hexdigit())
+            })
         }),
         "记录 ID 应由 16 个随机字节派生"
     );
 }
 
 struct FakeCodexClient {
+    source_thread_id: Option<String>,
     cwd: Option<String>,
-    prompt: Option<String>,
+    name: Option<String>,
     fail: bool,
 }
 
 impl LocalCodexClient for FakeCodexClient {
-    fn start_thread(&mut self, cwd: &str) -> Result<String, ImportError> {
+    fn fork_thread(
+        &mut self,
+        source_thread_id: &str,
+        cwd: &str,
+        last_turn_id: Option<&str>,
+    ) -> Result<String, ImportError> {
+        self.source_thread_id = Some(source_thread_id.to_owned());
         self.cwd = Some(cwd.to_owned());
         if self.fail {
-            return Err(ImportError::Codex("无法启动 Codex".into()));
+            return Err(ImportError::Codex("无法分叉 Codex 会话".into()));
         }
+        assert_eq!(source_thread_id, "source-thread");
+        assert_eq!(last_turn_id, Some("turn-2"));
         Ok("local-thread-generated".to_owned())
     }
 
-    fn start_turn(
-        &mut self,
-        thread_id: &str,
-        cwd: &str,
-        text: &str,
-    ) -> Result<(), ImportError> {
-        assert_ne!(thread_id, "source-thread");
-        assert_eq!(cwd, self.cwd.as_deref().expect("先创建 thread"));
-        self.prompt = Some(text.to_owned());
+    fn set_thread_name(&mut self, thread_id: &str, name: &str) -> Result<(), ImportError> {
+        assert_eq!(thread_id, "local-thread-generated");
+        assert_eq!(self.source_thread_id.as_deref(), Some("source-thread"));
+        assert!(self.cwd.is_some());
+        self.name = Some(name.to_owned());
         Ok(())
     }
-
-    fn wait_for_turn_completion(&mut self) -> Result<(), ImportError> {
-        let prompt = self.prompt.as_deref().expect("先发送提示");
-        assert!(prompt.contains("不可信历史"));
-        assert!(!prompt.contains("thread/start"));
-        assert!(prompt.contains("rm -rf /"), "历史文本应保留为不可信引用");
-        Ok(())
-    }
-
 }
 
 #[test]
@@ -235,34 +212,25 @@ fn failed_thread_creation_keeps_the_snapshot_and_records_the_failure() {
     let dir = unique_dir("failure");
     let project = dir.join("receiver-project");
     fs::create_dir_all(&project).expect("创建接收方项目");
-    let snapshot_file = dir.join("staged.json");
-    let snapshot = snapshot();
-    fs::write(
-        &snapshot_file,
-        serde_json::to_vec(&snapshot).expect("快照可序列化"),
-    )
-    .expect("写入暂存快照");
+    let (bundle_file, bundle, codex_home) = write_native_bundle(&dir);
     let database = ImportDatabase::open(dir.join("imports.db")).expect("数据库可打开");
     let service = ImportService::with_client_factory(
         Box::new(|_| {
             Ok(Box::new(FakeCodexClient {
+                source_thread_id: None,
                 cwd: None,
-                prompt: None,
+                name: None,
                 fail: true,
             }))
         }),
         Box::new(|| "local-thread-generated".to_owned()),
-    );
+    )
+    .with_codex_home(codex_home);
     let error = service
-        .create_local_thread(
-            &read_staged(&snapshot_file).expect("读取暂存快照"),
-            &project,
-            &snapshot_file,
-            &database,
-        )
+        .create_local_thread(&bundle, &project, &bundle_file, &database)
         .expect_err("应报告创建失败");
     assert!(matches!(error, ImportError::Codex(_)));
-    assert!(snapshot_file.exists(), "失败时快照必须保留");
+    assert!(bundle_file.exists(), "失败时原生会话包必须保留");
     assert_eq!(database.list().expect("可列出记录")[0].status, "failed");
     fs::remove_dir_all(&dir).expect("清理测试目录");
 }
@@ -328,14 +296,16 @@ fn replays_of_the_same_import_keep_its_retry_metadata() {
 }
 
 #[test]
-fn opener_falls_back_to_a_pasteable_prompt_when_codex_is_unavailable() {
+fn opener_reports_the_native_thread_when_codex_cannot_open_it_automatically() {
     let opener = CodexOpener::with_launcher(Box::new(|_| Err("没有可用的系统启动方式".into())));
-    let result = opener.open_thread("local-thread-1", "可直接粘贴的续接提示");
+    let result = opener.open_thread("local-thread-1");
     assert!(result.is_err());
-    assert!(result
-        .expect_err("应返回后备方案")
-        .to_string()
-        .contains("可直接粘贴"));
+    assert!(
+        result
+            .expect_err("应返回后备方案")
+            .to_string()
+            .contains("重启 Codex")
+    );
 }
 
 #[test]
@@ -348,8 +318,19 @@ fn missing_local_thread_is_reported_before_attempting_to_open_codex() {
     assert!(!service.thread_exists("local-thread-1"));
 }
 
-fn read_staged(path: &Path) -> Result<SnapshotV1, ImportError> {
-        let bytes = fs::read(path).map_err(|error| ImportError::Snapshot(error.to_string()))?;
-        validate_snapshot(&bytes)
-            .map_err(|error| ImportError::Snapshot(error.to_string()))
+fn write_native_bundle(dir: &Path) -> (PathBuf, Vec<u8>, PathBuf) {
+    let snapshot = snapshot();
+    let codex_home = dir.join("codex-home");
+    let sessions = codex_home.join("sessions/2026/11/13");
+    fs::create_dir_all(&sessions).expect("创建测试 CODEX_HOME");
+    let rollout = sessions.join("rollout-2026-11-13T00-00-00-source-thread.jsonl");
+    fs::write(
+        &rollout,
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"source-thread\",\"session_id\":\"source-thread\"}}\n",
+    )
+    .expect("写入测试 rollout");
+    let bundle = native::build_bundle(&codex_home, &rollout, &snapshot).expect("构建原生会话包");
+    let bundle_file = dir.join("staged.agbridge");
+    fs::write(&bundle_file, &bundle).expect("写入暂存会话包");
+    (bundle_file, bundle, codex_home)
 }

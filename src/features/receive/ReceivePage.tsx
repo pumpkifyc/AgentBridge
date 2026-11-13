@@ -108,9 +108,9 @@ export function ReceivePage() {
   async function deleteStaged(shareId: string) {
     try {
       await receiveApi.deleteStaged(shareId);
-      setState({ kind: "input", message: "已删除本机暂存快照" });
+      setState({ kind: "input", message: "已删除本机暂存原生会话包" });
     } catch {
-      setState({ kind: "error", message: "删除暂存快照失败，请稍后重试。" });
+      setState({ kind: "error", message: "删除暂存原生会话包失败，请稍后重试。" });
     }
   }
 
@@ -181,12 +181,12 @@ export function ReceivePage() {
       )}
       {state.kind === "staged" && (
         <div className="panel">
-          <h2>快照已暂存，等待选择本地项目后导入</h2>
+          <h2>原生会话包已暂存，等待选择本地项目后导入</h2>
           <TransferProgress progress={{ kind: "complete", transferredBytes: state.snapshot.totalBytes, totalBytes: state.snapshot.totalBytes }} />
-          <p className="hint">快照已通过完整性校验并保存在本机。导入页面将在你确认本地项目目录后创建独立 Codex 会话。</p>
+          <p className="hint">原生会话包已通过完整性校验并保存在本机。导入后会在 Codex 中创建带完整历史的独立会话。</p>
           <div className="action-row">
             <button type="button" className="secondary-action" onClick={() => void deleteStaged(state.snapshot.shareId)}>
-              删除暂存快照
+              删除暂存会话包
             </button>
           </div>
         </div>

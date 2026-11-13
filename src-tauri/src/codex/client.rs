@@ -12,6 +12,7 @@ use crate::snapshot::{
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, BufWriter, Write},
+    path::Path,
     process::{Child, ChildStdin, Command, Stdio},
     sync::{Arc, Mutex, mpsc},
     thread,
@@ -51,8 +52,26 @@ impl CodexClient {
         executable: impl Into<std::ffi::OsString>,
         timeout: Duration,
     ) -> Result<Self, CodexError> {
+        Self::connect_with_timeout_and_home(executable, timeout, None)
+    }
+
+    pub fn connect_with_executable_and_home(
+        executable: impl Into<std::ffi::OsString>,
+        codex_home: &Path,
+    ) -> Result<Self, CodexError> {
+        Self::connect_with_timeout_and_home(executable, DEFAULT_REQUEST_TIMEOUT, Some(codex_home))
+    }
+
+    fn connect_with_timeout_and_home(
+        executable: impl Into<std::ffi::OsString>,
+        timeout: Duration,
+        codex_home: Option<&Path>,
+    ) -> Result<Self, CodexError> {
         let mut command = Command::new(executable.into());
         configure_codex_command(&mut command);
+        if let Some(codex_home) = codex_home {
+            command.env("CODEX_HOME", codex_home);
+        }
         let mut child = command
             .arg("app-server")
             .arg("--stdio")
@@ -353,6 +372,52 @@ impl CodexClient {
         )?)
     }
 
+    pub fn thread_rollout_path(&mut self, thread_id: &str) -> Result<String, CodexError> {
+        let response = self.request(
+            "thread/read",
+            json!({"threadId": thread_id, "includeTurns": false}),
+        )?;
+        let response: ThreadReadResponse = serde_json::from_value(response)
+            .map_err(|error| CodexError::Protocol(error.to_string()))?;
+        response
+            .thread
+            .and_then(|thread| thread.path)
+            .ok_or_else(|| {
+                CodexError::Protocol(
+                    "Codex 未返回会话 rollout 文件路径，当前版本可能不支持原生分享".into(),
+                )
+            })
+    }
+
+    pub fn fork_thread(
+        &mut self,
+        source_thread_id: &str,
+        cwd: &str,
+        last_turn_id: Option<&str>,
+    ) -> Result<String, CodexError> {
+        let response = self.request(
+            "thread/fork",
+            json!({
+                "threadId": source_thread_id,
+                "cwd": cwd,
+                "excludeTurns": true,
+                "lastTurnId": last_turn_id,
+                "threadSource": "user"
+            }),
+        )?;
+        let response: ThreadForkResponse = serde_json::from_value(response)
+            .map_err(|error| CodexError::Protocol(error.to_string()))?;
+        Ok(response.thread.id)
+    }
+
+    pub fn set_thread_name(&mut self, thread_id: &str, name: &str) -> Result<(), CodexError> {
+        self.request(
+            "thread/name/set",
+            json!({"threadId": thread_id, "name": name}),
+        )?;
+        Ok(())
+    }
+
     pub fn start_thread(&mut self, cwd: &str) -> Result<String, CodexError> {
         let response = self.request("thread/start", json!({"cwd": cwd}))?;
         let result: ThreadIdentityResponse = serde_json::from_value(response)
@@ -567,6 +632,14 @@ struct ThreadDetails {
     created_at: i64,
     updated_at: i64,
     git_info: Option<GitInfo>,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThreadForkResponse {
+    thread: ThreadIdentity,
 }
 
 #[derive(serde::Deserialize)]

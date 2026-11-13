@@ -171,14 +171,18 @@ fn reads_current_thread_items_api_and_millisecond_timestamps() {
     let snapshot = client
         .read_snapshot("source-thread", None)
         .expect("当前公开接口应返回完整快照");
-    assert!(snapshot
-        .messages
-        .iter()
-        .any(|message| message.text == "Whole thread page"));
-    assert!(snapshot
-        .messages
-        .iter()
-        .any(|message| message.text == "Add a test"));
+    assert!(
+        snapshot
+            .messages
+            .iter()
+            .any(|message| message.text == "Whole thread page")
+    );
+    assert!(
+        snapshot
+            .messages
+            .iter()
+            .any(|message| message.text == "Add a test")
+    );
     assert_eq!(snapshot.messages[0].timestamp, Some(120));
     drop(client);
     remove_dir(&dir);

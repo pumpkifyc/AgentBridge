@@ -5,7 +5,7 @@ use super::{
         ServerMessage, ShareMetadata,
     },
 };
-use crate::snapshot::{schema::SnapshotV1, validate::validate_snapshot};
+use crate::native::{self, NativeBundleError};
 use rustls::{
     ClientConfig,
     pki_types::{CertificateDer, ServerName},
@@ -36,8 +36,8 @@ pub enum TransferClientError {
     Declined,
     #[error("完整性校验失败：{0}")]
     Integrity(#[from] IntegrityError),
-    #[error("快照校验失败：{0}")]
-    Snapshot(String),
+    #[error("原生会话包校验失败：{0}")]
+    Native(#[from] NativeBundleError),
     #[error("连接中断")]
     Interrupted,
     #[error("连接分享方超时")]
@@ -175,23 +175,19 @@ impl TransferClient {
     pub async fn accept(
         self,
         progress: Option<ProgressCallback>,
-    ) -> Result<(SnapshotV1, Vec<serde_json::Value>), TransferClientError> {
+    ) -> Result<(Vec<u8>, Vec<serde_json::Value>), TransferClientError> {
         self.complete(progress).await
     }
 
     async fn complete(
         mut self,
         progress: Option<ProgressCallback>,
-    ) -> Result<(SnapshotV1, Vec<serde_json::Value>), TransferClientError> {
+    ) -> Result<(Vec<u8>, Vec<serde_json::Value>), TransferClientError> {
         let proposal = self
             .proposal
             .take()
             .ok_or_else(|| TransferClientError::Protocol("缺少预览结果".into()))?;
-        send(
-            &mut self.writer,
-            &ClientMessage::Accept { approved: true },
-        )
-        .await?;
+        send(&mut self.writer, &ClientMessage::Accept { approved: true }).await?;
         let mut bytes = Vec::with_capacity(proposal.total_bytes as usize);
         let mut progress_events = Vec::new();
         let mut emit = |transferred_bytes: u64| {
@@ -206,11 +202,7 @@ impl TransferClient {
             progress_events.push(serde_json::to_value(event).unwrap_or_default());
         };
         for index in 0..proposal.chunk_count {
-            send(
-                &mut self.writer,
-                &ClientMessage::ChunkAck { index },
-            )
-            .await?;
+            send(&mut self.writer, &ClientMessage::ChunkAck { index }).await?;
             match receive(&mut self.reader).await? {
                 ServerMessage::Chunk {
                     index: chunk_index,
@@ -247,15 +239,10 @@ impl TransferClient {
             }
         };
         integrity::verify(&bytes, &expected)?;
-        let snapshot = validate_snapshot(&bytes)
-            .map_err(|error| TransferClientError::Snapshot(error.to_string()))?;
-        send(
-            &mut self.writer,
-            &ClientMessage::Accept { approved: true },
-        )
-        .await?;
+        native::parse_bundle(&bytes)?;
+        send(&mut self.writer, &ClientMessage::Accept { approved: true }).await?;
         match receive(&mut self.reader).await? {
-            ServerMessage::Complete => Ok((snapshot, progress_events)),
+            ServerMessage::Complete => Ok((bytes, progress_events)),
             ServerMessage::Error { code, message } => {
                 Err(TransferClientError::Rejected(code, message))
             }

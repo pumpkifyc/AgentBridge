@@ -38,6 +38,8 @@ pub enum ImportError {
     PromptTooLarge,
     #[error("快照无效：{0}")]
     Snapshot(String),
+    #[error("原生会话包无效：{0}")]
+    Native(String),
     #[error("本机 Codex 导入失败：{0}")]
     Codex(String),
     #[error("本地导入记录失败：{0}")]

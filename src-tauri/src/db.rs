@@ -39,8 +39,8 @@ impl ImportDatabase {
             std::fs::create_dir_all(parent)
                 .map_err(|error| DatabaseError::Open(error.to_string()))?;
         }
-        let connection = Connection::open(&path)
-            .map_err(|error| DatabaseError::Open(error.to_string()))?;
+        let connection =
+            Connection::open(&path).map_err(|error| DatabaseError::Open(error.to_string()))?;
         connection
             .execute_batch(MIGRATION)
             .map_err(|error| DatabaseError::Open(error.to_string()))?;
@@ -48,8 +48,7 @@ impl ImportDatabase {
     }
 
     fn connect(&self) -> Result<Connection, DatabaseError> {
-        Connection::open(&self.path)
-            .map_err(|error| DatabaseError::Query(error.to_string()))
+        Connection::open(&self.path).map_err(|error| DatabaseError::Query(error.to_string()))
     }
 
     pub fn upsert(&self, record: &ImportRecord) -> Result<(), DatabaseError> {

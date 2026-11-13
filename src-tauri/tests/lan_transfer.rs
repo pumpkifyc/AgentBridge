@@ -1,4 +1,5 @@
 use agentbridge_lib::{
+    native,
     pairing::{InvitationManager, InvitationState, invitation::short_code},
     snapshot::schema::{MessageRole, SnapshotMessage, SnapshotMetadata, SnapshotV1},
     transfer::{
@@ -9,6 +10,7 @@ use agentbridge_lib::{
     },
 };
 use std::{
+    fs,
     net::{IpAddr, Ipv4Addr},
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -48,6 +50,39 @@ fn snapshot() -> SnapshotV1 {
     }
 }
 
+fn native_bundle(snapshot: &SnapshotV1) -> Vec<u8> {
+    native_bundle_with_padding(snapshot, 0)
+}
+
+fn native_bundle_with_padding(snapshot: &SnapshotV1, minimum_payload_bytes: usize) -> Vec<u8> {
+    let root = std::env::temp_dir().join(format!(
+        "agentbridge-lan-native-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("系统时间有效")
+            .as_nanos()
+    ));
+    let sessions = root.join("sessions/2026/11/13");
+    fs::create_dir_all(&sessions).expect("创建测试会话目录");
+    let rollout = sessions.join(format!(
+        "rollout-2026-11-13T00-00-00-{}.jsonl",
+        snapshot.metadata.source_thread_id
+    ));
+    let mut rollout_bytes = format!(
+        "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{}\",\"session_id\":\"{}\"}}}}\n",
+        snapshot.metadata.source_thread_id, snapshot.metadata.source_thread_id
+    )
+    .into_bytes();
+    if rollout_bytes.len() < minimum_payload_bytes {
+        rollout_bytes.resize(minimum_payload_bytes, b'x');
+    }
+    fs::write(&rollout, rollout_bytes).expect("写入测试会话");
+    let bundle = native::build_bundle(&root, &rollout, snapshot).expect("构建原生会话包");
+    let _ = fs::remove_dir_all(root);
+    bundle
+}
+
 async fn start_server(
     manager: &Arc<InvitationManager>,
     ttl_seconds: u64,
@@ -61,21 +96,27 @@ async fn start_server(
         0,
         ttl_seconds,
     );
-    let handle = TransferServer::serve(invitation.clone(), snapshot(), manager.clone())
-        .await
-        .expect("应启动传输服务器");
+    let current_snapshot = snapshot();
+    let handle = TransferServer::serve(
+        invitation.clone(),
+        current_snapshot.clone(),
+        native_bundle(&current_snapshot),
+        manager.clone(),
+    )
+    .await
+    .expect("应启动传输服务器");
     let mut updated = invitation.clone();
     updated.endpoint = handle.local_addr.to_string();
     updated.port = handle.local_addr.port();
     (updated, handle)
 }
 
-fn status(manager: &InvitationManager, invitation: &agentbridge_lib::pairing::Invitation) -> InvitationState {
+fn status(
+    manager: &InvitationManager,
+    invitation: &agentbridge_lib::pairing::Invitation,
+) -> InvitationState {
     // get() returns the state stored when last updated; active invitations are accessible.
-    manager
-        .get(&invitation.id)
-        .expect("邀请应存在")
-        .state
+    manager.get(&invitation.id).expect("邀请应存在").state
 }
 
 fn multi_chunk_snapshot() -> SnapshotV1 {
@@ -134,7 +175,7 @@ async fn preview_returns_only_metadata_and_accept_transfers_validated_snapshot()
     assert_eq!(proposal.metadata.share_id, invitation.id);
     assert_eq!(proposal.metadata.source_title, "修复登录流程");
     assert_eq!(proposal.metadata.message_count, 2);
-    assert_eq!(proposal.metadata.warnings, vec!["已省略图片附件"]);
+    assert_eq!(proposal.metadata.warnings, vec!["摘要预览：已省略图片附件"]);
     assert_eq!(
         proposal.metadata.source_working_directory.as_deref(),
         Some("/Users/alice/project")
@@ -143,13 +184,19 @@ async fn preview_returns_only_metadata_and_accept_transfers_validated_snapshot()
     assert!(proposal.chunk_count > 0);
     assert_eq!(status(&manager, &invitation), InvitationState::Previewed);
 
-    let (received, progress) = client
-        .accept(None)
-        .await
-        .expect("应校验摘要并接受快照");
-    assert_eq!(received, snapshot());
+    let (received, progress) = client.accept(None).await.expect("应校验摘要并接受快照");
+    assert_eq!(
+        native::parse_bundle(&received)
+            .expect("接收内容应为原生会话包")
+            .manifest
+            .source_thread_id,
+        "source-thread"
+    );
     assert!(!progress.is_empty());
-    assert_eq!(client_invitation_to_string(&proposal.metadata), invitation.id);
+    assert_eq!(
+        client_invitation_to_string(&proposal.metadata),
+        invitation.id
+    );
     sleep(Duration::from_millis(30)).await;
     assert!(matches!(
         manager.get(&invitation.id),
@@ -167,14 +214,14 @@ async fn wrong_certificate_fingerprint_is_rejected_before_authentication() {
     let manager = Arc::new(InvitationManager::new());
     let (invitation, handle) = start_server(&manager, 60).await;
     let other = manager.create("snapshot-2");
-    let error = TransferClient::preview(
-        &invitation.endpoint,
-        &invitation.secret,
-        &other.fingerprint,
-    )
-    .await
-    .expect_err("指纹不匹配时必须拒绝 TLS 连接");
-    assert!(matches!(error, TransferClientError::Connection(_) | TransferClientError::Tls(_)));
+    let error =
+        TransferClient::preview(&invitation.endpoint, &invitation.secret, &other.fingerprint)
+            .await
+            .expect_err("指纹不匹配时必须拒绝 TLS 连接");
+    assert!(matches!(
+        error,
+        TransferClientError::Connection(_) | TransferClientError::Tls(_)
+    ));
     assert_eq!(status(&manager, &invitation), InvitationState::Waiting);
     handle.stop();
 }
@@ -243,13 +290,9 @@ async fn expired_and_revoked_invitations_cannot_be_used() {
         manager.get(&expired.id),
         Err(agentbridge_lib::pairing::InvitationError::Expired)
     ));
-    let error = TransferClient::preview(
-        &expired.endpoint,
-        &expired.secret,
-        &expired.fingerprint,
-    )
-    .await
-    .expect_err("过期邀请不能被使用");
+    let error = TransferClient::preview(&expired.endpoint, &expired.secret, &expired.fingerprint)
+        .await
+        .expect_err("过期邀请不能被使用");
     assert!(
         matches!(
             error,
@@ -302,10 +345,7 @@ async fn one_time_credential_cannot_be_replayed() {
     )
     .await;
     let error = match replay {
-        Ok((client, _)) => client
-            .accept(None)
-            .await
-            .expect_err("相同凭据不能重放"),
+        Ok((client, _)) => client.accept(None).await.expect_err("相同凭据不能重放"),
         Err(error) => error,
     };
     assert!(
@@ -386,7 +426,13 @@ async fn interrupted_preview_can_retry_the_same_still_valid_invitation() {
         .accept(None)
         .await
         .expect("重试应完成校验后的快照传输");
-    assert_eq!(received, snapshot());
+    assert_eq!(
+        native::parse_bundle(&received)
+            .expect("接收内容应为原生会话包")
+            .manifest
+            .source_thread_id,
+        "source-thread"
+    );
     sleep(Duration::from_millis(30)).await;
     assert_eq!(
         manager.status(&invitation.id),
@@ -403,15 +449,12 @@ async fn interrupted_preview_can_retry_the_same_still_valid_invitation() {
 async fn interrupted_chunk_transfer_can_retry_with_the_same_invitation() {
     let manager = Arc::new(InvitationManager::new());
     let large = multi_chunk_snapshot();
-    let invitation = manager.create_with_options(
-        "snapshot-1",
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
-        0,
-        60,
-    );
+    let invitation =
+        manager.create_with_options("snapshot-1", IpAddr::V4(Ipv4Addr::LOCALHOST), 0, 60);
     let handle = TransferServer::serve(
         invitation.clone(),
         large.clone(),
+        native_bundle_with_padding(&large, MAX_CHUNK_BYTES * 2 + 1),
         manager.clone(),
     )
     .await
@@ -427,22 +470,15 @@ async fn interrupted_chunk_transfer_can_retry_with_the_same_invitation() {
     .await
     .expect("应完成预览");
     assert!(proposal.chunk_count > 1, "测试快照应跨多个数据块");
-    let abort_slot: Arc<Mutex<Option<tokio::task::AbortHandle>>> =
-        Arc::new(Mutex::new(None));
+    let abort_slot: Arc<Mutex<Option<tokio::task::AbortHandle>>> = Arc::new(Mutex::new(None));
     let slot_for_callback = Arc::clone(&abort_slot);
     let progress: ProgressCallback = Arc::new(move |_| {
-        if let Some(task) = slot_for_callback
-            .lock()
-            .expect("中止句柄锁可读取")
-            .take()
-        {
+        if let Some(task) = slot_for_callback.lock().expect("中止句柄锁可读取").take() {
             task.abort();
         }
     });
     let task = tokio::spawn(async move { client.accept(Some(progress)).await });
-    *abort_slot
-        .lock()
-        .expect("中止句柄锁可写入") = Some(task.abort_handle());
+    *abort_slot.lock().expect("中止句柄锁可写入") = Some(task.abort_handle());
     let error = task.await.expect_err("收到首个数据块时中断应使传输失败");
     assert!(error.is_cancelled(), "客户端任务应被中止：{error:?}");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
@@ -451,7 +487,10 @@ async fn interrupted_chunk_transfer_can_retry_with_the_same_invitation() {
     {
         sleep(Duration::from_millis(10)).await;
     }
-    assert!(manager.get(&invitation.id).is_ok(), "中断不应消耗一次性凭据");
+    assert!(
+        manager.get(&invitation.id).is_ok(),
+        "中断不应消耗一次性凭据"
+    );
 
     let (retry, _) = TransferClient::preview(
         &invitation.endpoint,
@@ -460,13 +499,19 @@ async fn interrupted_chunk_transfer_can_retry_with_the_same_invitation() {
     )
     .await
     .expect("同一有效邀请应允许重新预览");
-    let (received, _) = retry
-        .accept(None)
-        .await
-        .expect("重试应完成传输");
-    assert_eq!(received, large);
+    let (received, _) = retry.accept(None).await.expect("重试应完成传输");
+    assert_eq!(
+        native::parse_bundle(&received)
+            .expect("接收内容应为原生会话包")
+            .manifest
+            .message_count,
+        large.messages.len()
+    );
     sleep(Duration::from_millis(50)).await;
-    assert_eq!(manager.status(&invitation.id), Ok(InvitationState::Accepted));
+    assert_eq!(
+        manager.status(&invitation.id),
+        Ok(InvitationState::Accepted)
+    );
     assert!(matches!(
         manager.get(&invitation.id),
         Err(agentbridge_lib::pairing::InvitationError::Inactive)
@@ -523,27 +568,17 @@ async fn a_successful_transfer_consumes_the_invitation_but_a_failed_one_does_not
     .await
     .expect_err("已停止的服务器无法连接");
     assert!(matches!(error, TransferClientError::Connection(_)));
-    assert_eq!(
-        manager.status(&invitation.id),
-        Ok(InvitationState::Waiting)
-    );
+    assert_eq!(manager.status(&invitation.id), Ok(InvitationState::Waiting));
 
     let (second, second_handle) = start_server(&manager, 60).await;
-    let (client, _) = TransferClient::preview(
-        &second.endpoint,
-        &second.secret,
-        &second.fingerprint,
-    )
-    .await
-    .expect("应完成预览");
+    let (client, _) =
+        TransferClient::preview(&second.endpoint, &second.secret, &second.fingerprint)
+            .await
+            .expect("应完成预览");
     client.accept(None).await.expect("应完成传输");
     sleep(Duration::from_millis(30)).await;
-    let replay = TransferClient::preview(
-        &second.endpoint,
-        &second.secret,
-        &second.fingerprint,
-    )
-    .await;
+    let replay =
+        TransferClient::preview(&second.endpoint, &second.secret, &second.fingerprint).await;
     match replay {
         Ok((retry, _)) => {
             let replay_error = retry
@@ -570,10 +605,7 @@ async fn a_successful_transfer_consumes_the_invitation_but_a_failed_one_does_not
             "重放错误类型：{error:?}"
         ),
     }
-    assert_eq!(
-        manager.status(&second.id),
-        Ok(InvitationState::Accepted)
-    );
+    assert_eq!(manager.status(&second.id), Ok(InvitationState::Accepted));
     second_handle.stop();
 }
 
@@ -583,7 +615,16 @@ async fn server_binds_only_to_the_selected_interface() {
     let (invitation, handle) = start_server(&manager, 60).await;
     assert_eq!(handle.local_addr.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
     assert_eq!(invitation.bind_ip, "127.0.0.1");
-    assert_eq!(handle.local_addr.port(), invitation.endpoint.rsplit_once(':').unwrap().1.parse::<u16>().unwrap());
+    assert_eq!(
+        handle.local_addr.port(),
+        invitation
+            .endpoint
+            .rsplit_once(':')
+            .unwrap()
+            .1
+            .parse::<u16>()
+            .unwrap()
+    );
     handle.stop();
 }
 
