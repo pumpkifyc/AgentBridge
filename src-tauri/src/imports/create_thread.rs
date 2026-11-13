@@ -1,6 +1,6 @@
 use super::{
     ImportError, ImportRecord,
-    prompt::{MAX_PROMPT_BYTES, build_continuation_prompt},
+    prompt::{MAX_PROMPT_CHARS, build_continuation_prompt},
     store::ImportStore,
 };
 use crate::{
@@ -146,7 +146,7 @@ impl ImportService {
             ));
         }
         let prompt = build_continuation_prompt(snapshot);
-        if prompt.len() > MAX_PROMPT_BYTES {
+        if prompt.chars().count() > MAX_PROMPT_CHARS {
             return Err(ImportError::PromptTooLarge);
         }
         let id = self.new_record_id();

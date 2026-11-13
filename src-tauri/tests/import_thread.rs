@@ -75,7 +75,9 @@ fn continuation_prompt_marks_external_history_as_untrusted_and_keeps_text() {
     assert!(prompt.contains("历史助手"));
     assert!(prompt.contains("历史工具结果"));
     assert!(!prompt.contains("/home/alice/project"));
-    assert!(prompt.len() <= agentbridge_lib::imports::prompt::MAX_PROMPT_BYTES);
+    assert!(
+        prompt.chars().count() <= agentbridge_lib::imports::prompt::MAX_PROMPT_CHARS
+    );
     fs::remove_dir_all(&dir).expect("清理测试目录");
 }
 
@@ -84,15 +86,53 @@ fn continuation_prompt_truncates_oversized_history_but_keeps_the_untrusted_wrapp
     let mut oversized = snapshot();
     oversized.messages.push(SnapshotMessage {
         role: MessageRole::User,
-        text: "历".repeat(agentbridge_lib::imports::prompt::MAX_PROMPT_BYTES),
+        text: format!(
+            "{}旧消息标记",
+            "历".repeat(agentbridge_lib::imports::prompt::MAX_PROMPT_CHARS)
+        ),
         turn_index: 1,
         timestamp: Some(130),
         historical_tool_summary: None,
     });
+    oversized.messages.push(SnapshotMessage {
+        role: MessageRole::Assistant,
+        text: "最新消息标记".into(),
+        turn_index: 2,
+        timestamp: Some(140),
+        historical_tool_summary: None,
+    });
     let prompt = build_continuation_prompt(&oversized);
-    assert!(prompt.len() <= agentbridge_lib::imports::prompt::MAX_PROMPT_BYTES);
+    assert!(
+        prompt.chars().count() <= agentbridge_lib::imports::prompt::MAX_PROMPT_CHARS
+    );
     assert!(prompt.starts_with("以下是由 AgentBridge 导入"));
     assert!(prompt.contains("历史内容因大小限制截断"));
+    assert!(prompt.contains("历史引用区结束"));
+    assert!(prompt.contains("最新消息标记"));
+    assert!(!prompt.contains("旧消息标记"));
+}
+
+#[test]
+fn continuation_prompt_keeps_the_tail_of_one_oversized_latest_message() {
+    let mut oversized = snapshot();
+    oversized.messages = vec![SnapshotMessage {
+        role: MessageRole::Assistant,
+        text: format!(
+            "{}最新历史尾部",
+            "历".repeat(agentbridge_lib::imports::prompt::MAX_PROMPT_CHARS)
+        ),
+        turn_index: 0,
+        timestamp: Some(140),
+        historical_tool_summary: None,
+    }];
+
+    let prompt = build_continuation_prompt(&oversized);
+
+    assert!(
+        prompt.chars().count() <= agentbridge_lib::imports::prompt::MAX_PROMPT_CHARS
+    );
+    assert!(prompt.contains("最新历史消息过长"));
+    assert!(prompt.contains("最新历史尾部"));
     assert!(prompt.contains("历史引用区结束"));
 }
 
