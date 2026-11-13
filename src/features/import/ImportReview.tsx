@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { StagedSnapshot } from "../receive/receiveTypes";
+import { formatPreviewWarnings } from "../share/previewWarnings";
 import { describeError } from "../share/shareErrors";
 import { ProjectPicker } from "./ProjectPicker";
 import { importApi } from "./importApi";
@@ -18,6 +19,7 @@ export function ImportReview({ staged, onImported }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [record, setRecord] = useState<ImportRecord | null>(null);
   const sourcePath = staged.metadata.sourceWorkingDirectory;
+  const warnings = formatPreviewWarnings(staged.metadata.warnings);
 
   async function choose() {
     setBusy(true);
@@ -91,10 +93,10 @@ export function ImportReview({ staged, onImported }: Props) {
         导入会把原始会话 rollout 复制到本机 Codex 数据目录，并通过公开接口创建独立会话分支。
         历史工具调用不会重新执行；原始会话可能包含工具输出、文件路径或其他敏感内容，请只导入可信来源。
       </p>
-      {staged.metadata.warnings.length > 0 && (
+      {warnings.length > 0 && (
         <div className="warnings" role="status">
-          <strong>预览说明</strong>
-          <ul>{staged.metadata.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+          <strong>预览显示说明</strong>
+          <ul>{warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
         </div>
       )}
       <div className="action-row">

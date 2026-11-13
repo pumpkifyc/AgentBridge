@@ -161,11 +161,7 @@ impl ShareMetadata {
             source_working_directory: snapshot.metadata.source_working_directory.clone(),
             message_count: snapshot.messages.len(),
             cutoff_turn_id: snapshot.metadata.cutoff_turn_id.clone(),
-            warnings: snapshot
-                .warnings
-                .iter()
-                .map(|warning| format!("摘要预览：{warning}"))
-                .collect(),
+            warnings: snapshot.warnings.clone(),
             schema_version: snapshot.schema_version,
         }
     }

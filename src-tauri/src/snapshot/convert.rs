@@ -83,7 +83,10 @@ pub fn convert_codex_items(
     let mut warnings = WarningCollector::default();
     for (turn_index, turn) in thread.turns.iter().take(included_turn_count).enumerate() {
         if turn.truncated {
-            warnings.add(format!("第 {} 轮历史内容已截断", turn_index + 1));
+            warnings.add(format!(
+                "预览中第 {} 轮历史内容不完整；原生分享包保留 Codex 当前可提供的原始记录",
+                turn_index + 1
+            ));
         }
         for item in &turn.items {
             for converted in convert_recorded_item(item) {
@@ -154,10 +157,14 @@ pub fn convert_codex_items(
                     }
                     CodexItem::ToolCall { .. } => {}
                     CodexItem::Binary { mime_type } => {
-                        warnings.add(format!("已省略二进制附件（{mime_type}）"));
+                        warnings.add(format!(
+                            "预览中未展开二进制附件（{mime_type}）；原生分享包仍完整保留"
+                        ));
                     }
                     CodexItem::Unsupported { kind } => {
-                        warnings.add(format!("已省略不支持的 {kind} 内容"))
+                        warnings.add(format!(
+                            "预览中 {kind} 已折叠；原生分享包仍完整保留"
+                        ))
                     }
                 }
             }
@@ -346,7 +353,16 @@ impl WarningCollector {
             .into_iter()
             .map(|(warning, count)| {
                 if count > 1 {
-                    format!("{warning}（共 {count} 项）")
+                    warning
+                        .split_once("；原生分享包")
+                        .map_or_else(
+                            || format!("{warning}（共 {count} 项）"),
+                            |(preview, native)| {
+                                format!(
+                                    "{preview}（共 {count} 项）；原生分享包{native}"
+                                )
+                            },
+                        )
                 } else {
                     warning
                 }
@@ -356,5 +372,7 @@ impl WarningCollector {
 }
 
 fn add_redaction_warning(warnings: &mut WarningCollector) {
-    warnings.add("检测到疑似凭据，已在快照中隐藏".to_owned());
+    warnings.add(
+        "预览中检测到疑似凭据，默认隐藏；原生分享包仍完整保留原文".to_owned(),
+    );
 }

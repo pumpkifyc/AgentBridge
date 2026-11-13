@@ -297,8 +297,8 @@ fn aggregates_repeated_unsupported_item_warnings() {
     assert_eq!(
         snapshot.warnings,
         vec![
-            "已省略不支持的 未知 Codex 历史条目 内容（共 3 项）",
-            "已省略不支持的 图片附件 内容（共 2 项）",
+            "预览中 未知 Codex 历史条目 已折叠（共 3 项）；原生分享包仍完整保留",
+            "预览中 图片附件 已折叠（共 2 项）；原生分享包仍完整保留",
         ]
     );
 }

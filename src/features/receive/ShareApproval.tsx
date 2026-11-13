@@ -1,4 +1,5 @@
 import type { ReceivedPreview } from "./receiveTypes";
+import { formatPreviewWarnings } from "../share/previewWarnings";
 
 interface Props {
   preview: ReceivedPreview;
@@ -9,6 +10,7 @@ interface Props {
 
 export function ShareApproval({ preview, busy, onAccept, onDecline }: Props) {
   const { metadata } = preview;
+  const warnings = formatPreviewWarnings(metadata.warnings);
   return (
     <section className="panel" aria-labelledby="share-approval-title">
       <div className="panel-heading">
@@ -32,11 +34,14 @@ export function ShareApproval({ preview, busy, onAccept, onDecline }: Props) {
         <dt>原生会话包大小</dt>
         <dd>{preview.totalBytes.toLocaleString()} 字节</dd>
       </dl>
-      {metadata.warnings.length > 0 && (
+      <p className="hint">
+        当前离线确认只显示元数据，不展示会话正文；接受后再下载完整原生会话包。
+      </p>
+      {warnings.length > 0 && (
         <div className="warnings" role="status">
-          <strong>预览说明</strong>
+          <strong>预览显示说明</strong>
           <ul>
-            {metadata.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+            {warnings.map((warning) => <li key={warning}>{warning}</li>)}
           </ul>
         </div>
       )}

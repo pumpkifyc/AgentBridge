@@ -29,6 +29,14 @@ beforeEach(() => {
 });
 
 describe("导入确认", () => {
+  it("只把旧提示解释为预览范围，不暗示原生包被删减", () => {
+    render(<ImportReview staged={staged} />);
+
+    expect(screen.getByText("预览显示说明")).toBeInTheDocument();
+    expect(screen.getByText("预览中 图片附件 已折叠；原生分享包仍完整保留")).toBeInTheDocument();
+    expect(screen.queryByText("已省略图片附件")).not.toBeInTheDocument();
+  });
+
   it("显示接收方选择的目录并拒绝使用分享方路径", async () => {
     render(<ImportReview staged={staged} />);
 

@@ -57,7 +57,10 @@ describe("接收会话页面", () => {
     expect(await screen.findByText("修复登录流程")).toBeInTheDocument();
     expect(screen.getByText("2 条消息")).toBeInTheDocument();
     expect(screen.getByText("turn-2")).toBeInTheDocument();
-    expect(screen.getByText("已省略图片附件")).toBeInTheDocument();
+    expect(screen.getByText("预览显示说明")).toBeInTheDocument();
+    expect(screen.getByText("预览中 图片附件 已折叠；原生分享包仍完整保留")).toBeInTheDocument();
+    expect(screen.getByText("当前离线确认只显示元数据", { exact: false })).toBeInTheDocument();
+    expect(screen.queryByText("已省略图片附件")).not.toBeInTheDocument();
     expect(screen.getByText("仅作说明，接收方需选择自己的项目目录")).toBeInTheDocument();
     expect(screen.queryByText("修复登录")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "接受并下载" })).toBeInTheDocument();
