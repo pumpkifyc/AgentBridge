@@ -47,6 +47,7 @@ pub mod db;
 pub mod imports;
 pub mod native;
 pub mod pairing;
+pub mod preview;
 pub mod process;
 pub mod snapshot;
 pub mod transfer;
