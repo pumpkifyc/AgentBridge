@@ -18,6 +18,8 @@ use tokio::{
 };
 use tokio_rustls::TlsConnector;
 
+const PREVIEW_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Debug, thiserror::Error)]
 pub enum TransferClientError {
     #[error("连接信息无效：{0}")]
@@ -38,6 +40,8 @@ pub enum TransferClientError {
     Snapshot(String),
     #[error("连接中断")]
     Interrupted,
+    #[error("连接分享方超时")]
+    TimedOut,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +79,19 @@ pub struct PendingTransfer {
 
 impl TransferClient {
     pub async fn preview(
+        endpoint: &str,
+        secret: &str,
+        expected_fingerprint: &str,
+    ) -> Result<(Self, ShareProposal), TransferClientError> {
+        tokio::time::timeout(
+            PREVIEW_TIMEOUT,
+            Self::preview_inner(endpoint, secret, expected_fingerprint),
+        )
+        .await
+        .map_err(|_| TransferClientError::TimedOut)?
+    }
+
+    async fn preview_inner(
         endpoint: &str,
         secret: &str,
         expected_fingerprint: &str,
@@ -352,4 +369,35 @@ async fn receive<R: AsyncBufReadExt + Unpin>(
         return Err(TransferClientError::Interrupted);
     }
     serde_json::from_str(&line).map_err(|error| TransferClientError::Protocol(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn preview_stops_when_the_peer_accepts_but_never_responds() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("测试监听器应启动");
+        let endpoint = listener.local_addr().expect("应取得测试地址").to_string();
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.expect("应接受测试连接");
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+        let fingerprint = format!("sha256:{}", "0".repeat(64));
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(6),
+            TransferClient::preview(&endpoint, "secret", &fingerprint),
+        )
+        .await;
+        server.abort();
+
+        assert!(result.is_ok(), "预览连接必须由客户端自身限时结束");
+        assert!(matches!(
+            result.expect("外层超时已确认不会触发"),
+            Err(TransferClientError::TimedOut)
+        ));
+    }
 }

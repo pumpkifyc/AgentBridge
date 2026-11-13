@@ -71,7 +71,12 @@ describe("导入确认", () => {
 
   it("创建会话失败时保留快照并展示后备提示", async () => {
     mockTauri("select_project_directory", "*", "/Users/receiver/local-project");
-    mockTauri("import_snapshot", "*", new Error("Codex 不可用"), true);
+    mockTauri(
+      "import_snapshot",
+      "*",
+      new Error("无法启动 Codex App Server：系统找不到指定文件"),
+      true,
+    );
     render(<ImportReview staged={staged} />);
     fireEvent.click(screen.getByRole("button", { name: "选择本机目录" }));
     await screen.findByDisplayValue("/Users/receiver/local-project");
@@ -80,6 +85,7 @@ describe("导入确认", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("无法创建本机续接会话");
     expect(screen.getByText(/快照仍保留在本机/)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("系统找不到指定文件");
     expect(screen.queryByText(/已创建本机续接会话/)).not.toBeInTheDocument();
   });
 });

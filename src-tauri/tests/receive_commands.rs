@@ -11,7 +11,12 @@ use agentbridge_lib::{
     },
 };
 use serde::{Deserialize, Serialize};
-use std::{fs, net::{IpAddr, Ipv4Addr}, sync::Arc};
+use std::{
+    fs,
+    net::{IpAddr, Ipv4Addr},
+    sync::{Arc, Once, OnceLock},
+    time::Duration,
+};
 use tauri::{
     Manager,
     ipc::{CallbackFn, InvokeBody, RuntimeAuthority},
@@ -19,7 +24,6 @@ use tauri::{
     webview::InvokeRequest,
 };
 use tauri_utils::acl::ExecutionContext;
-use std::sync::{Once, OnceLock};
 
 fn test_runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -278,7 +282,10 @@ fn cancelling_a_transfer_aborts_the_download_task() {
         .remove(&invitation.id)
         .expect("预览应保存待接收客户端")
         .client;
-    let task = receive_state.runtime.spawn(async move { client.accept(None).await });
+    let task = receive_state.runtime.spawn(async move {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        client.accept(None).await
+    });
     let abort = task.abort_handle();
     receive_state
         .transfers

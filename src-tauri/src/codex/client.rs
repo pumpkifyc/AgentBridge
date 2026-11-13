@@ -51,7 +51,9 @@ impl CodexClient {
         executable: impl Into<std::ffi::OsString>,
         timeout: Duration,
     ) -> Result<Self, CodexError> {
-        let mut child = Command::new(executable.into())
+        let mut command = Command::new(executable.into());
+        crate::process::configure_quiet_command(&mut command);
+        let mut child = command
             .arg("app-server")
             .arg("--stdio")
             .stdin(Stdio::piped())
@@ -424,7 +426,9 @@ impl Drop for CodexClient {
 fn terminate_process_tree(child: &mut Child) {
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill")
+        let mut command = Command::new("taskkill");
+        crate::process::configure_quiet_command(&mut command);
+        let _ = command
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())

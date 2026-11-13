@@ -336,9 +336,51 @@ fn local_ipv4_addresses() -> Vec<LocalAddress> {
             _ => None,
         })
         .collect();
-    addresses.sort_by(|left, right| left.ip.cmp(&right.ip).then(left.name.cmp(&right.name)));
+    addresses = sort_local_addresses(addresses);
     addresses.dedup_by(|left, right| left.ip == right.ip);
     addresses
+}
+
+fn sort_local_addresses(mut addresses: Vec<LocalAddress>) -> Vec<LocalAddress> {
+    addresses.sort_by(|left, right| {
+        local_address_priority(left)
+            .cmp(&local_address_priority(right))
+            .then(left.ip.cmp(&right.ip))
+            .then(left.name.cmp(&right.name))
+    });
+    addresses
+}
+
+fn local_address_priority(address: &LocalAddress) -> u8 {
+    let name = address.name.to_ascii_lowercase();
+    if [
+        "vethernet",
+        "virtual",
+        "vmware",
+        "virtualbox",
+        "vbox",
+        "hyper-v",
+        "docker",
+        "wsl",
+        "tailscale",
+        "zerotier",
+        "npcap",
+        "tap-",
+        "tun",
+        "utun",
+    ]
+    .iter()
+    .any(|marker| name.contains(marker))
+    {
+        2
+    } else if ["wi-fi", "wifi", "wlan", "ethernet", "eth", "en"]
+        .iter()
+        .any(|marker| name.contains(marker))
+    {
+        0
+    } else {
+        1
+    }
 }
 
 #[tauri::command]
@@ -372,7 +414,9 @@ fn compatible(version: &str) -> bool {
 fn codex_version() -> Result<String, CommandError> {
     let executable = crate::codex::executable::resolve_codex_executable()
         .map_err(CommandError::from)?;
-    let output = std::process::Command::new(executable)
+    let mut command = std::process::Command::new(executable);
+    crate::process::configure_quiet_command(&mut command);
+    let output = command
         .arg("--version")
         .output()
         .map_err(|error| CommandError::new("notInstalled", format!("找不到 Codex CLI：{error}")))?;
@@ -1140,5 +1184,27 @@ fn map_import_error(error: ImportError) -> CommandError {
         ImportError::Store(_) => "databaseFailed",
     };
     CommandError::new(code, error.to_string())
+}
+
+#[cfg(test)]
+mod local_address_tests {
+    use super::*;
+
+    #[test]
+    fn physical_lan_interfaces_are_preferred_over_virtual_adapters() {
+        let addresses = sort_local_addresses(vec![
+            LocalAddress {
+                ip: "172.21.192.1".into(),
+                name: "vEthernet (WSL)".into(),
+            },
+            LocalAddress {
+                ip: "192.168.1.20".into(),
+                name: "Wi-Fi".into(),
+            },
+        ]);
+
+        assert_eq!(addresses[0].name, "Wi-Fi");
+        assert_eq!(addresses[1].name, "vEthernet (WSL)");
+    }
 }
 

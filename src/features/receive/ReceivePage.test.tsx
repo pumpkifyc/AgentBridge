@@ -74,6 +74,17 @@ describe("接收会话页面", () => {
     expect(screen.queryByText("修复登录流程")).not.toBeInTheDocument();
   });
 
+  it("连接超时时提示检查物理网卡和 Windows 防火墙", async () => {
+    mockTauri("preview_share", "*", new Error("连接分享方超时"), true);
+    render(<ReceivePage />);
+
+    fireEvent.change(screen.getByLabelText("配对信息"), { target: { value: pairingText } });
+    fireEvent.click(screen.getByRole("button", { name: "预览分享" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Wi-Fi 或 Ethernet");
+    expect(screen.getByRole("alert")).toHaveTextContent("Windows 防火墙");
+  });
+
   it("接收方拒绝分享后回到输入状态", async () => {
     mockTauri("preview_share", "*", preview);
     mockTauri("decline_share", { shareId: "share-1" }, undefined);
