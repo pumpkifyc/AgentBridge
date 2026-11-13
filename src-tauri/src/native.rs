@@ -584,8 +584,9 @@ mod tests {
         let child = "019c0000-0000-7000-8000-000000000001";
         let parent = "019c0000-0000-7000-8000-000000000002";
         let ancestor = "019c0000-0000-7000-8000-000000000003";
+        let child_branch = "019c0000-0000-7000-8000-000000000004";
         let source = sessions.join(format!(
-            "rollout-2026-11-13T00-00-00-{child}_{parent}.jsonl"
+            "rollout-2026-11-13T00-00-00-{child}_{child_branch}.jsonl"
         ));
         fs::write(
             &source,
