@@ -402,18 +402,11 @@ fn find_rollout_by_id(
 ) -> Result<PathBuf, NativeBundleError> {
     let direct: Vec<_> = candidates
         .iter()
-        .filter(|path| {
-            path.file_name()
-                .and_then(OsStr::to_str)
-                .is_some_and(|name| name.contains(thread_id))
-        })
+        .filter(|path| rollout_filename_ends_with_thread_id(path, thread_id))
         .cloned()
         .collect();
     for path in direct {
-        if read_meta(&path)
-            .map(|meta| meta.id == thread_id || meta.session_id == thread_id)
-            .unwrap_or(false)
-        {
+        if read_meta(&path).is_ok() {
             return Ok(path);
         }
     }
@@ -428,6 +421,22 @@ fn find_rollout_by_id(
     Err(NativeBundleError::Rollout(format!(
         "找不到分叉依赖会话 {thread_id}"
     )))
+}
+
+fn rollout_filename_ends_with_thread_id(path: &Path, thread_id: &str) -> bool {
+    let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    let Some(stem) = name
+        .strip_suffix(".jsonl.zst")
+        .or_else(|| name.strip_suffix(".jsonl"))
+    else {
+        return false;
+    };
+    let Some(prefix) = stem.strip_suffix(thread_id) else {
+        return false;
+    };
+    prefix.ends_with('-') || prefix.ends_with('_')
 }
 
 fn read_meta(path: &Path) -> Result<RolloutMeta, NativeBundleError> {
@@ -561,6 +570,61 @@ mod tests {
         let parsed = parse_bundle(&bundle).expect("解析会话包");
         assert_eq!(parsed.manifest.source_thread_id, "thread-1");
         assert_eq!(parsed.files[0], fs::read(&path).expect("读取会话"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn finds_a_fork_dependency_by_the_thread_id_suffix_in_its_filename() {
+        let root = std::env::temp_dir().join(format!(
+            "agentbridge-native-parent-id-{}",
+            std::process::id()
+        ));
+        let sessions = root.join("sessions/2026/11/13");
+        fs::create_dir_all(&sessions).expect("创建测试目录");
+        let child = "019c0000-0000-7000-8000-000000000001";
+        let parent = "019c0000-0000-7000-8000-000000000002";
+        let ancestor = "019c0000-0000-7000-8000-000000000003";
+        let source = sessions.join(format!(
+            "rollout-2026-11-13T00-00-00-{child}_{parent}.jsonl"
+        ));
+        fs::write(
+            &source,
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{child}\",\"session_id\":\"{child}\",\"history_base\":{{\"thread_id\":\"{parent}\",\"end_ordinal_exclusive\":1,\"end_byte_offset\":1}}}}}}\n"
+            ),
+        )
+        .expect("写入子会话");
+        let parent_path = sessions.join(format!(
+            "rollout-2026-11-13T00-00-01-{ancestor}_{parent}.jsonl"
+        ));
+        fs::write(
+            &parent_path,
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{ancestor}\",\"session_id\":\"{ancestor}\"}}}}\n"
+            ),
+        )
+        .expect("写入父会话");
+        let snapshot = SnapshotV1 {
+            schema_version: 1,
+            metadata: crate::snapshot::schema::SnapshotMetadata {
+                source_thread_id: child.into(),
+                title: "分叉会话".into(),
+                created_at: 1,
+                updated_at: 2,
+                cutoff_turn_id: None,
+                project_name: None,
+                repository_id: None,
+                source_working_directory: None,
+            },
+            messages: Vec::new(),
+            warnings: Vec::new(),
+        };
+
+        let bundle = build_bundle(&root, &source, &snapshot).expect("通过文件名后缀找到分叉依赖");
+        let parsed = parse_bundle(&bundle).expect("解析会话包");
+
+        assert_eq!(parsed.files.len(), 2);
+        assert_eq!(parsed.files[1], fs::read(parent_path).expect("读取父会话"));
         let _ = fs::remove_dir_all(root);
     }
 
