@@ -4,6 +4,7 @@ use std::{
     ffi::{OsStr, OsString},
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 pub const EXECUTABLE_ENV: &str = "AGENTBRIDGE_CODEX_EXECUTABLE";
@@ -17,6 +18,59 @@ pub fn resolve_codex_executable() -> Result<PathBuf, CodexError> {
         platform_candidates(),
     )
     .ok_or_else(|| CodexError::NotInstalled(not_installed_message_for(cfg!(windows))))
+}
+
+pub fn configure_codex_command(command: &mut Command) {
+    crate::process::configure_quiet_command(command);
+    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"));
+    if let Some(path) = codex_command_path(env::var_os("PATH"), home.map(PathBuf::from)) {
+        command.env("PATH", path);
+    }
+}
+
+fn codex_command_path(path_value: Option<OsString>, home: Option<PathBuf>) -> Option<OsString> {
+    let mut directories = Vec::new();
+    if let Some(home) = home {
+        directories.extend([
+            home.join(".local").join("bin"),
+            home.join(".npm-global").join("bin"),
+            home.join(".volta").join("bin"),
+            home.join(".cargo").join("bin"),
+            home.join(".bun").join("bin"),
+        ]);
+        directories.extend(nvm_bin_directories(&home));
+    }
+    #[cfg(target_os = "macos")]
+    directories.extend([
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ]);
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(app_data) = env::var_os("APPDATA") {
+            directories.push(PathBuf::from(app_data).join("npm"));
+        }
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            let local_app_data = PathBuf::from(local_app_data);
+            directories.extend([
+                local_app_data.join("Volta").join("bin"),
+                local_app_data
+                    .join("Microsoft")
+                    .join("WinGet")
+                    .join("Links"),
+            ]);
+        }
+    }
+    if let Some(path_value) = path_value {
+        directories.extend(env::split_paths(&path_value));
+    }
+    let mut seen = std::collections::HashSet::new();
+    directories.retain(|directory| {
+        !directory.as_os_str().is_empty()
+            && directory.exists()
+            && seen.insert(directory.clone())
+    });
+    env::join_paths(directories).ok()
 }
 
 fn resolve_with(
@@ -76,9 +130,22 @@ fn home_candidates(home: &Path) -> Vec<PathBuf> {
 }
 
 fn find_nvm_install(home: &Path) -> Option<PathBuf> {
+    nvm_bin_directories(home)
+        .into_iter()
+        .flat_map(|directory| {
+            executable_names()
+                .iter()
+                .map(move |name| directory.join(name))
+        })
+        .find(|candidate| is_executable_candidate(candidate))
+}
+
+fn nvm_bin_directories(home: &Path) -> Vec<PathBuf> {
     let versions = home.join(".nvm").join("versions").join("node");
-    let mut directories: Vec<PathBuf> = fs::read_dir(versions)
-        .ok()?
+    let Ok(entries) = fs::read_dir(versions) else {
+        return Vec::new();
+    };
+    let mut directories: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .collect();
@@ -86,12 +153,8 @@ fn find_nvm_install(home: &Path) -> Option<PathBuf> {
     directories
         .into_iter()
         .rev()
-        .flat_map(|directory| {
-            executable_names()
-                .iter()
-                .map(move |name| directory.join("bin").join(name))
-        })
-        .find(|candidate| is_executable_candidate(candidate))
+        .map(|directory| directory.join("bin"))
+        .collect()
 }
 
 fn executable_names() -> &'static [&'static str] {
@@ -320,6 +383,25 @@ mod tests {
         let resolved = resolve_with(None, Some(OsString::new()), Some(home), Vec::new());
 
         assert_eq!(resolved, Some(executable));
+    }
+
+    #[test]
+    fn command_path_includes_user_package_manager_directories() {
+        let temp = TestDir::new("command-path");
+        let home = temp.0.join("home");
+        let npm_bin = home.join(".npm-global").join("bin");
+        let local_bin = home.join(".local").join("bin");
+        fs::create_dir_all(&npm_bin).expect("创建 npm 目录");
+        fs::create_dir_all(&local_bin).expect("创建本地工具目录");
+        let existing = env::join_paths([Path::new("/usr/bin"), Path::new("/bin")])
+            .expect("构造测试 PATH");
+
+        let path = codex_command_path(Some(existing), Some(home)).expect("应构造子进程 PATH");
+        let directories: Vec<PathBuf> = env::split_paths(&path).collect();
+
+        assert!(directories.contains(&local_bin));
+        assert!(directories.contains(&npm_bin));
+        assert!(directories.contains(&PathBuf::from("/usr/bin")));
     }
 
     #[test]
