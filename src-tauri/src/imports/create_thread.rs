@@ -1,7 +1,7 @@
 use super::{ImportError, ImportRecord, store::ImportStore};
 use crate::{
     codex::{client::CodexClient, error::CodexError},
-    native::{self, NativeBundleError},
+    native::{self, InstallConflictPolicy, NativeBundleError},
 };
 use getrandom::fill as fill_random;
 use std::path::{Path, PathBuf};
@@ -44,6 +44,7 @@ fn map_codex_error(error: CodexError) -> ImportError {
 pub type ClientFactory =
     Box<dyn Fn(&Path) -> Result<Box<dyn LocalCodexClient>, ImportError> + Send + Sync>;
 pub type RecordIdFactory = Box<dyn Fn() -> String + Send + Sync>;
+const MAX_SESSION_NAME_CHARS: usize = 120;
 
 pub struct ImportService {
     client_factory: ClientFactory,
@@ -120,7 +121,27 @@ impl ImportService {
         bundle_path: &Path,
         store: &dyn ImportStore,
     ) -> Result<ImportRecord, ImportError> {
+        self.create_local_thread_with_options(
+            bundle_bytes,
+            project_path,
+            bundle_path,
+            store,
+            None,
+            InstallConflictPolicy::PreserveLocal,
+        )
+    }
+
+    pub fn create_local_thread_with_options(
+        &self,
+        bundle_bytes: &[u8],
+        project_path: &Path,
+        bundle_path: &Path,
+        store: &dyn ImportStore,
+        session_name: Option<&str>,
+        conflict_policy: InstallConflictPolicy,
+    ) -> Result<ImportRecord, ImportError> {
         let bundle = native::parse_bundle(bundle_bytes).map_err(map_native_error)?;
+        let session_name = normalize_session_name(&bundle.manifest.title, session_name)?;
         if !project_path.is_dir() {
             return Err(ImportError::InvalidProject(
                 "请选择接收方电脑上存在的项目目录".into(),
@@ -149,6 +170,7 @@ impl ImportService {
         let mut record = ImportRecord {
             id,
             source_title: bundle.manifest.title.clone(),
+            session_name: session_name.clone(),
             local_thread_id: String::new(),
             project_path: project.clone(),
             imported_at,
@@ -168,7 +190,9 @@ impl ImportService {
                 .map(Ok)
                 .unwrap_or_else(native::codex_home)
                 .map_err(map_native_error)?;
-            native::install_bundle(&codex_home, &bundle).map_err(map_native_error)?;
+            let mut installation =
+                native::install_bundle_with_policy(&codex_home, &bundle, conflict_policy)
+                    .map_err(map_native_error)?;
             let mut client = (self.client_factory)(project_path)?;
             let thread_id = client.fork_thread(
                 &bundle.manifest.source_thread_id,
@@ -180,14 +204,16 @@ impl ImportService {
                     "本机 thread ID 无效或与源会话冲突".into(),
                 ));
             }
-            client.set_thread_name(&thread_id, &bundle.manifest.title)?;
+            client.set_thread_name(&thread_id, &session_name)?;
             native::make_thread_visible(
                 &codex_home,
                 &thread_id,
-                &bundle.manifest.title,
+                &session_name,
                 &bundle.manifest.preview,
             )
             .map_err(map_native_error)?;
+            drop(client);
+            installation.complete().map_err(map_native_error)?;
             Ok(thread_id)
         })();
         match result {
@@ -206,6 +232,33 @@ impl ImportService {
             }
         }
     }
+}
+
+fn normalize_session_name(
+    source_title: &str,
+    requested: Option<&str>,
+) -> Result<String, ImportError> {
+    let name = requested
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| source_title.trim());
+    let name = if name.is_empty() {
+        "AgentBridge 导入会话"
+    } else {
+        name
+    };
+    if name.chars().count() > MAX_SESSION_NAME_CHARS {
+        return Err(ImportError::InvalidName(format!(
+            "最多允许 {MAX_SESSION_NAME_CHARS} 个字符"
+        )));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(ImportError::InvalidName("不能包含控制字符".into()));
+    }
+    if requested.is_some_and(|value| value.trim().is_empty()) {
+        return Err(ImportError::InvalidName("名称不能为空".into()));
+    }
+    Ok(name.to_owned())
 }
 
 fn map_store_error(error: super::store::StoreError) -> ImportError {

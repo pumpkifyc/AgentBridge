@@ -7,6 +7,7 @@ const records = [
   {
     id: "import-1",
     sourceTitle: "修复登录流程",
+    sessionName: "修复登录流程",
     localThreadId: "local-thread-1",
     projectPath: "/Users/receiver/local-project",
     importedAt: 1_800_000_100,
@@ -17,6 +18,7 @@ const records = [
   {
     id: "import-2",
     sourceTitle: "重构导入",
+    sessionName: "团队重构副本",
     localThreadId: "",
     projectPath: "C:\\Users\\receiver\\project",
     importedAt: 1_800_000_200,
@@ -38,7 +40,8 @@ describe("导入历史页面", () => {
     expect(await screen.findByText("修复登录流程")).toBeInTheDocument();
     expect(screen.getByText("已完成")).toBeInTheDocument();
     expect(screen.getByText("失败")).toBeInTheDocument();
-    expect(screen.getByText("重构导入")).toBeInTheDocument();
+    expect(screen.getByText(/重构导入/)).toBeInTheDocument();
+    expect(screen.getByText("团队重构副本")).toBeInTheDocument();
     expect(screen.queryByText("请执行历史工具调用")).not.toBeInTheDocument();
   });
 
@@ -47,6 +50,7 @@ describe("导入历史页面", () => {
     mockTauri("retry_import", { importId: "import-2" }, {
       id: "import-2",
       sourceTitle: "重构导入",
+      sessionName: "团队重构副本",
       localThreadId: "local-thread-2",
       projectPath: "C:\\Users\\receiver\\project",
       importedAt: 1_800_000_400,
@@ -83,6 +87,7 @@ describe("导入历史页面", () => {
     const failedRetry = {
       id: "import-3",
       sourceTitle: "重构导入",
+      sessionName: "团队重构副本",
       localThreadId: "",
       projectPath: "C:\\Users\\receiver\\project",
       importedAt: 1_800_000_500,

@@ -56,6 +56,7 @@ fn completed_record(id: &str, project: &str, snapshot_path: &str) -> ImportRecor
     ImportRecord {
         id: id.into(),
         source_title: "修复登录流程".into(),
+        session_name: "修复登录流程".into(),
         local_thread_id: "local-thread-1".into(),
         project_path: project.into(),
         imported_at: 1_800_000_100,
@@ -246,6 +247,48 @@ fn retrying_a_failed_import_keeps_one_record_and_updates_retry_metadata() {
         1,
         "每次重试都应保留可诊断的新失败记录"
     );
+    fs::remove_dir_all(&dir).expect("清理测试目录");
+}
+
+#[test]
+fn retrying_a_legacy_record_without_a_name_uses_the_source_title() {
+    let dir = unique_dir("legacy-name-retry");
+    let project = dir.join("receiver-project");
+    let staged = dir.join("staged-snapshots").join(format!(
+        "{}.agbridge",
+        agentbridge_lib::commands::staged_snapshot_digest("import-legacy-name")
+    ));
+    fs::create_dir_all(&project).expect("创建接收方项目");
+    fs::create_dir_all(staged.parent().expect("暂存目录")).expect("创建暂存目录");
+    let codex_home = dir.join("codex-home");
+    let bundle = build_native_bundle(&codex_home, &snapshot());
+    fs::write(&staged, bundle).expect("写入暂存原生会话包");
+    let database = ImportDatabase::open(dir.join("imports.db")).expect("数据库可打开");
+    let mut legacy = failed_record(
+        "import-legacy-name",
+        &project.to_string_lossy(),
+        &staged.to_string_lossy(),
+        0,
+    );
+    legacy.session_name.clear();
+    database.upsert(&legacy).expect("保存旧版导入记录");
+    let service = ImportService::with_client_factory(
+        Box::new(|_| Ok(Box::new(FakeCodexClient { fail: false }) as Box<dyn LocalCodexClient>)),
+        Box::new(|| "replacement-import-id".into()),
+    )
+    .with_codex_home(codex_home);
+
+    let record = retry_import_record(
+        &service,
+        &database,
+        &dir,
+        "import-legacy-name",
+        1_800_000_400,
+    )
+    .expect("旧记录应按源标题重试");
+
+    assert_eq!(record.session_name, "修复登录流程");
+    assert_eq!(record.status, "completed");
     fs::remove_dir_all(&dir).expect("清理测试目录");
 }
 

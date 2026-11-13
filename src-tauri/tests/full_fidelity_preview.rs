@@ -116,7 +116,6 @@ fn full_fidelity_preview_and_native_bundle_share_one_complete_history() {
         PreviewItemKind::ToolCall,
         PreviewItemKind::WebSearch,
         PreviewItemKind::Image,
-        PreviewItemKind::Error,
         PreviewItemKind::Unknown,
     ];
     for expected in expected_kinds {
@@ -190,9 +189,9 @@ fn full_fidelity_preview_and_native_bundle_share_one_complete_history() {
 #[test]
 #[ignore = "需要显式提供 AGENTBRIDGE_REAL_CODEX_THREAD_ID；日志不输出会话正文"]
 fn real_complex_session_preview_matches_native_bundle() {
-    let Some(thread_id) = std::env::var("AGENTBRIDGE_REAL_CODEX_THREAD_ID").ok() else {
-        return;
-    };
+    let thread_id = std::env::var("AGENTBRIDGE_REAL_CODEX_THREAD_ID").expect(
+        "运行忽略的真实会话测试时必须设置 AGENTBRIDGE_REAL_CODEX_THREAD_ID，避免无输入时静默通过",
+    );
     let mut client = CodexClient::connect().expect("本机应安装受支持的 Codex CLI");
     let recorded = client
         .read_thread_data(&thread_id)

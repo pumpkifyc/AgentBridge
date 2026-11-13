@@ -124,10 +124,17 @@ export function SharePage({ active = true }: Props) {
 
   useEffect(() => () => {
     const previewId = activePreviewId.current;
+    activePreviewId.current = null;
     if (previewId) {
       void shareApi.cancelPreview(previewId).catch(() => undefined);
     }
   }, []);
+
+  useEffect(() => {
+    if (!active) {
+      invalidatePreview(true);
+    }
+  }, [active, invalidatePreview]);
 
   const handleSelectThread = useCallback((threadId: string) => {
     invalidatePreview(true);

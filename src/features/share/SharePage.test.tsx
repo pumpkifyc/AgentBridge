@@ -416,4 +416,29 @@ describe("分享会话页面", () => {
     expect(previewIds[0]).toBe(previewIds[1]);
     expect(screen.queryByText("会话预览")).not.toBeInTheDocument();
   });
+
+  it("隐藏或卸载分享页时取消已生成但仍可分享的预览", async () => {
+    const calls = captureInvocations();
+    mockAvailable();
+    const { rerender, unmount } = render(<SharePage />);
+
+    await screen.findByRole("button", { name: "生成分享预览" });
+    await clickPreview();
+    await screen.findByText("会话预览");
+    const previewRequest = calls.find((call) => call.command === "generate_preview")
+      ?.args?.request as { previewId: string };
+
+    rerender(<SharePage active={false} />);
+
+    await waitFor(() => {
+      expect(calls).toContainEqual({
+        command: "cancel_preview",
+        args: { previewId: previewRequest.previewId },
+      });
+    });
+    expect(calls.filter((call) => call.command === "cancel_preview")).toHaveLength(1);
+
+    unmount();
+    expect(calls.filter((call) => call.command === "cancel_preview")).toHaveLength(1);
+  });
 });

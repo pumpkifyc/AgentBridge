@@ -19,12 +19,16 @@ export function HistoryRow({
   onRetry,
   onDelete,
 }: Props) {
+  const displayName = record.sessionName?.trim() || record.sourceTitle || "未命名会话";
   return (
     <li className="history-row">
       <div className="panel-heading">
-        <strong>{record.sourceTitle || "未命名会话"}</strong>
+        <strong>{displayName}</strong>
         <span>{STATUS_LABELS[record.status] ?? record.status}</span>
       </div>
+      {record.sessionName && record.sessionName !== record.sourceTitle && (
+        <small>源会话：{record.sourceTitle}</small>
+      )}
       <small>本机项目：{record.projectPath}</small>
       <small>本机会话：{record.localThreadId || "尚未创建"}</small>
       {record.error && <small className="hint">{record.error}</small>}

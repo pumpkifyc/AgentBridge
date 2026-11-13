@@ -26,6 +26,10 @@ pub struct Page<T> {
 pub struct TurnSummary {
     pub id: String,
     pub completed: bool,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub error: Option<Value>,
     pub started_at: Option<i64>,
     pub completed_at: Option<i64>,
     #[serde(default)]
@@ -44,6 +48,14 @@ pub struct RecordedItem {
 pub struct ThreadTurn {
     pub id: String,
     pub completed: bool,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub error: Option<Value>,
+    #[serde(default)]
+    pub started_at: Option<i64>,
+    #[serde(default)]
+    pub completed_at: Option<i64>,
     #[serde(default)]
     pub truncated: bool,
     pub items: Vec<RecordedItem>,

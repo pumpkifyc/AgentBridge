@@ -11,6 +11,7 @@ use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -158,6 +159,86 @@ fn creates_a_new_thread_in_the_receiver_project_and_persists_an_import_record() 
 }
 
 #[test]
+fn conflicting_local_rollout_is_restored_after_fork_uses_the_packaged_snapshot() {
+    let dir = unique_dir("conflict");
+    let project = dir.join("receiver-project");
+    fs::create_dir_all(&project).expect("创建接收方项目");
+    let (bundle_file, bundle, codex_home) = write_native_bundle(&dir);
+    let parsed = native::parse_bundle(&bundle).expect("解析会话包");
+    let packaged = parsed.files[0].clone();
+    let rollout = codex_home.join(&parsed.manifest.files[0].relative_path);
+    let local_newer =
+        b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"source-thread\",\"session_id\":\"source-thread\"}}\n{\"ordinal\":1,\"payload\":\"local-newer\"}\n";
+    fs::write(&rollout, local_newer).expect("模拟同源本机会话继续更新");
+
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let observed_by_client = Arc::clone(&observed);
+    let rollout_for_client = rollout.clone();
+    let database = ImportDatabase::open(dir.join("imports.db")).expect("数据库可打开");
+    let service = ImportService::with_client_factory(
+        Box::new(move |_| {
+            Ok(Box::new(SnapshotInspectingClient {
+                rollout: rollout_for_client.clone(),
+                observed: Arc::clone(&observed_by_client),
+            }))
+        }),
+        Box::new(|| "local-thread-from-conflict".to_owned()),
+    )
+    .with_codex_home(codex_home);
+
+    service
+        .create_local_thread(&bundle, &project, &bundle_file, &database)
+        .expect("冲突时仍应使用分享快照创建本机会话");
+
+    assert_eq!(*observed.lock().expect("读取观察结果"), packaged);
+    assert_eq!(fs::read(&rollout).expect("读取恢复文件"), local_newer);
+    fs::remove_dir_all(&dir).expect("清理测试目录");
+}
+
+#[test]
+fn custom_import_name_is_used_for_the_native_thread_and_persisted() {
+    let dir = unique_dir("custom-name");
+    let project = dir.join("receiver-project");
+    fs::create_dir_all(&project).expect("创建接收方项目");
+    let (bundle_file, bundle, codex_home) = write_native_bundle(&dir);
+    let observed = Arc::new(Mutex::new(String::new()));
+    let observed_by_client = Arc::clone(&observed);
+    let database = ImportDatabase::open(dir.join("imports.db")).expect("数据库可打开");
+    let service = ImportService::with_client_factory(
+        Box::new(move |_| {
+            Ok(Box::new(NameRecordingClient {
+                name: Arc::clone(&observed_by_client),
+            }))
+        }),
+        Box::new(|| "local-thread-custom-name".to_owned()),
+    )
+    .with_codex_home(codex_home);
+
+    let record = service
+        .create_local_thread_with_options(
+            &bundle,
+            &project,
+            &bundle_file,
+            &database,
+            Some("团队共享副本"),
+            native::InstallConflictPolicy::PreserveLocal,
+        )
+        .expect("应使用自定义名称创建本机会话");
+
+    assert_eq!(record.session_name, "团队共享副本");
+    assert_eq!(*observed.lock().expect("读取名称"), "团队共享副本");
+    assert_eq!(
+        database
+            .get(&record.id)
+            .expect("读取导入记录")
+            .expect("记录存在")
+            .session_name,
+        "团队共享副本"
+    );
+    fs::remove_dir_all(&dir).expect("清理测试目录");
+}
+
+#[test]
 fn default_import_service_gives_each_local_record_a_unique_random_id() {
     let service = ImportService::default();
     let first = service.new_record_id();
@@ -172,6 +253,50 @@ fn default_import_service_gives_each_local_record_a_unique_random_id() {
         }),
         "记录 ID 应由 16 个随机字节派生"
     );
+}
+
+struct SnapshotInspectingClient {
+    rollout: PathBuf,
+    observed: Arc<Mutex<Vec<u8>>>,
+}
+
+impl LocalCodexClient for SnapshotInspectingClient {
+    fn fork_thread(
+        &mut self,
+        source_thread_id: &str,
+        _cwd: &str,
+        _last_turn_id: Option<&str>,
+    ) -> Result<String, ImportError> {
+        assert_eq!(source_thread_id, "source-thread");
+        *self.observed.lock().expect("保存观察结果") =
+            fs::read(&self.rollout).expect("读取分叉时的 rollout");
+        Ok("local-thread-from-conflict".into())
+    }
+
+    fn set_thread_name(&mut self, _thread_id: &str, _name: &str) -> Result<(), ImportError> {
+        Ok(())
+    }
+}
+
+struct NameRecordingClient {
+    name: Arc<Mutex<String>>,
+}
+
+impl LocalCodexClient for NameRecordingClient {
+    fn fork_thread(
+        &mut self,
+        _source_thread_id: &str,
+        _cwd: &str,
+        _last_turn_id: Option<&str>,
+    ) -> Result<String, ImportError> {
+        Ok("local-thread-custom-name".into())
+    }
+
+    fn set_thread_name(&mut self, thread_id: &str, name: &str) -> Result<(), ImportError> {
+        assert_eq!(thread_id, "local-thread-custom-name");
+        *self.name.lock().expect("保存名称") = name.to_owned();
+        Ok(())
+    }
 }
 
 struct FakeCodexClient {
@@ -213,6 +338,11 @@ fn failed_thread_creation_keeps_the_snapshot_and_records_the_failure() {
     let project = dir.join("receiver-project");
     fs::create_dir_all(&project).expect("创建接收方项目");
     let (bundle_file, bundle, codex_home) = write_native_bundle(&dir);
+    let parsed = native::parse_bundle(&bundle).expect("解析会话包");
+    let rollout = codex_home.join(&parsed.manifest.files[0].relative_path);
+    let local_newer =
+        b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"source-thread\",\"session_id\":\"source-thread\"}}\n{\"ordinal\":1,\"payload\":\"local-newer\"}\n";
+    fs::write(&rollout, local_newer).expect("模拟同源本机会话继续更新");
     let database = ImportDatabase::open(dir.join("imports.db")).expect("数据库可打开");
     let service = ImportService::with_client_factory(
         Box::new(|_| {
@@ -231,6 +361,11 @@ fn failed_thread_creation_keeps_the_snapshot_and_records_the_failure() {
         .expect_err("应报告创建失败");
     assert!(matches!(error, ImportError::Codex(_)));
     assert!(bundle_file.exists(), "失败时原生会话包必须保留");
+    assert_eq!(
+        fs::read(&rollout).expect("读取失败后的本机会话"),
+        local_newer,
+        "Codex 分叉失败时也必须恢复本机原 rollout"
+    );
     assert_eq!(database.list().expect("可列出记录")[0].status, "failed");
     fs::remove_dir_all(&dir).expect("清理测试目录");
 }
@@ -242,6 +377,7 @@ fn sqlite_history_supports_retry_metadata_and_deletes_only_local_data() {
     let record = ImportRecord {
         id: "import-1".into(),
         source_title: "修复登录流程".into(),
+        session_name: "修复登录流程".into(),
         local_thread_id: "local-thread-1".into(),
         project_path: "/Users/receiver/local-project".into(),
         imported_at: 1_800_000_100,
@@ -269,6 +405,7 @@ fn replays_of_the_same_import_keep_its_retry_metadata() {
     let mut record = ImportRecord {
         id: "import-1".into(),
         source_title: "修复登录流程".into(),
+        session_name: "修复登录流程".into(),
         local_thread_id: String::new(),
         project_path: "/Users/receiver/local-project".into(),
         imported_at: 1_800_000_100,

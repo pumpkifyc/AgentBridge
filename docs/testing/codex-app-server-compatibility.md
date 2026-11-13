@@ -16,6 +16,7 @@ Codex 提供了公开的 App Server JSON-RPC 接口。AgentBridge 使用 `initia
 - `thread/read` 只用于读取 thread 元数据，`thread/turns/list` 用于读取轮次。历史条目改用当前公开的 `thread/items/list`，按整个 thread 分页读取后再按 `turnId` 分组。
 - `thread/read` 的 `thread.path` 可用于定位 rollout。已确认 `.jsonl` 和 `.jsonl.zst` 会出现在 `sessions/` 或 `archived_sessions/`。
 - `thread/fork` 支持按 thread ID 分叉，`lastTurnId` 可把分叉截止到指定已完成轮次，`thread/name/set` 可设置会话名称。
+- `thread/turns/list` 的轮次状态会保留为 `completed`、`failed`、`interrupted` 或 `inProgress`；失败和中断轮次的 `error` 会作为默认折叠的错误块进入本机预览。
 - 在临时 `CODEX_HOME` 中复制 rollout 后，`thread/read` 可读取该会话，`thread/fork` 可创建新的原生 thread；只传 `thread/fork.path` 而不先安装文件不会自动复制 rollout。
 - `thread/items/list` 当前返回条目级时间字段 `startedAtMs` 和 `completedAtMs`，单位为毫秒。AgentBridge 将其转换为界面使用的秒级时间戳，同时兼容旧的秒级字段。
 - 旧接口 `thread/turns/items/list` 已不在当前导出 schema 中；对当前 App Server 调用会返回 `-32600 unknown variant`。代码不再依赖该接口。
@@ -27,9 +28,11 @@ Codex 提供了公开的 App Server JSON-RPC 接口。AgentBridge 使用 `initia
 
 macOS 从 Finder 启动的应用不会可靠继承终端 `PATH`。AgentBridge 会依次查找 `AGENTBRIDGE_CODEX_EXECUTABLE`、进程 `PATH`、`~/.local/bin`、`~/.npm-global/bin`、Volta、Cargo、Bun、NVM 当前安装目录，以及 Homebrew 和 macOS ChatGPT/Codex 桌面版的公开内置 CLI 位置。Windows 同时查找 `PATH`、`%APPDATA%\\npm` 和 `%LOCALAPPDATA%\\npm`。版本检查与 App Server 启动共用同一个解析结果，避免界面检查通过后却启动失败。
 
-会话列表只加载轻量元数据，并提供按标题、预览、工作目录和仓库标识即时搜索。选中会话只加载截止轮次；用户明确点击“生成分享预览”后才读取完整历史。每次预览由前端生成独立 `previewId`，Rust 将快照与会话 ID 绑定保存；切换会话、截止轮次、重新生成预览或离开页面时会取消旧令牌，迟到的异步结果也会被丢弃并清理。创建邀请必须同时提交匹配的 `threadId` 与 `previewId`，不能复用其他会话的旧预览。
+会话列表只加载轻量元数据，并提供按标题、预览、工作目录和仓库标识即时搜索。选中会话只加载截止轮次；用户明确点击“生成分享预览”后才读取完整历史。每次预览由前端生成独立 `previewId`，Rust 将快照与会话 ID 绑定保存；切换会话、截止轮次、重新生成预览或离开页面时会取消旧令牌。后端会记录“生成仍在进行时就已取消”的标识，迟到的插入会被拒绝，避免前端忽略结果后仍在 Rust 内存中留下不可分享的预览。创建邀请必须同时提交匹配的 `threadId` 与 `previewId`，不能复用其他会话的旧预览。
 
-全保真预览使用同一次 `thread/items/list` 分页结果生成版本化的 `PreviewTimelineV1` 和兼容的 `SnapshotV1`。时间线保留用户消息、助手回复、计划、思考、命令、文件 diff、MCP/动态工具、Web 搜索、图片、错误和未知 JSON，并按 Codex 返回顺序展示。分享页默认从最新轮次开始，每次可加载更早 3 轮；命令输出、diff、工具结果和未知 JSON 默认折叠，疑似凭据默认隐藏，用户可逐块展开本地原文。
+全保真预览使用同一次 `thread/items/list` 分页结果生成版本化的 `PreviewTimelineV1` 和兼容的 `SnapshotV1`。时间线保留用户消息、助手回复、计划、思考、命令退出码、文件 diff、MCP/动态工具、Web 搜索、图片、失败/中断轮次错误和未知 JSON，并按 Codex 返回顺序展示。未指定截止轮次时会保留包括最后失败或中断轮次在内的全部历史；指定截止轮次时只允许选择已完成轮次。分享页默认从最新轮次开始，每次可加载更早 3 轮；命令输出、diff、工具结果和未知 JSON 默认折叠，疑似凭据默认隐藏，用户可逐块展开本地原文。
+
+图片生成条目只展示安全的路径、URL、文件引用或“内联图片已隐藏”的占位说明，不把 base64/Data URL 放进默认可见块。本机时间线和原生包生成不应用旧兼容 `SnapshotV1` 的 20 MiB 总量及单字段 1 MiB 限制，原生包继续受自身 256 MiB 上限保护。
 
 `PreviewTimelineV1` 只经本机 Tauri IPC 返回分享方界面，不进入局域网元数据、配对信息或传输协议。局域网仍只传兼容元数据和原始 `.agbridge`；原生包继续原样保存 rollout 字节及其分叉依赖。接收方和导入页会说明折叠只影响在线预览，原始会话包仍完整保留。
 
@@ -55,9 +58,11 @@ macOS 从 Finder 启动的应用不会可靠继承终端 `PATH`。AgentBridge �
 
 ## 本机原生会话与导入记录
 
-接收方在导入页面通过 Tauri 原生目录选择器选择自己的项目目录，也可手动输入；分享方工作目录和本机暂存会话包路径都不能当成项目目录。导入命令只读取应用数据目录内、以分享标识哈希命名且再次通过完整性与路径校验的 `.agbridge` 原生会话包。
+接收方导入页通过公开 `thread/list` 汇总 Codex 已有项目；项目按本机存在的 `cwd` 去重，支持按名称或路径搜索。用户也可选择其他本机目录，或选择父目录并新建项目。导入后的会话名称可编辑并持久化，分享方工作目录和本机暂存会话包路径都不能当成项目目录。导入命令只读取应用数据目录内、以分享标识哈希命名且再次通过完整性与路径校验的 `.agbridge` 原生会话包。
 
-`ImportService` 先把原始 rollout 安装到本机 `CODEX_HOME`，再通过公开 `thread/fork` 创建新的本机 thread，`cwd` 使用接收方目录，并拒绝复用分享方 thread ID。成功、待处理和失败状态连同重试次数和错误保存在接收方应用数据目录的 SQLite `imports` 表中；失败时保留原生会话包以便重试。删除记录会删除记录及受应用数据目录约束的暂存会话包，不删除 Codex thread。
+提交导入前会检查同路径 rollout 是否与本机内容不同。检测到冲突时必须由用户选择“保留本机会话并新建”或“覆盖冲突会话”。`ImportService` 先把冲突文件备份并临时安装分享包，再通过公开 `thread/fork` 创建新的本机 thread，`cwd` 使用接收方目录，并拒绝复用分享方 thread ID。保留策略在分叉成功后恢复本机原文件；覆盖策略只在分叉、改名和可见性同步全部成功后提交删除备份。失败或中断时都会尝试恢复本机原文件。
+
+成功、待处理和失败状态连同导入名称、重试次数和错误保存在接收方应用数据目录的 SQLite `imports` 表中；旧数据库启动时自动增加名称字段。失败时保留原生会话包以便按原名称重试。删除记录会删除记录及受应用数据目录约束的暂存会话包，不删除 Codex thread。
 
 原生包可能包含原始工具输出、文件路径、系统提示或其他敏感内容；界面会在接收和导入前提示用户只处理可信来源。导入不会重新执行历史工具调用。
 

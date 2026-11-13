@@ -1,7 +1,7 @@
 use super::super::snapshot::{
     convert::convert_codex_items,
     schema::{MessageRole, SnapshotMessage, SnapshotMetadata, SnapshotV1},
-    validate::{SnapshotError, validate_snapshot},
+    validate::{SnapshotError, validate_local_snapshot, validate_snapshot},
 };
 use crate::codex::models::{RecordedItem, ThreadData, ThreadTurn};
 use serde_json::{Value, json};
@@ -28,6 +28,10 @@ fn thread() -> ThreadData {
             ThreadTurn {
                 id: "turn-1".into(),
                 completed: true,
+                status: Some("completed".into()),
+                error: None,
+                started_at: Some(100),
+                completed_at: Some(190),
                 truncated: false,
                 items: vec![
                     recorded(
@@ -84,6 +88,10 @@ fn thread() -> ThreadData {
             ThreadTurn {
                 id: "turn-2".into(),
                 completed: true,
+                status: Some("completed".into()),
+                error: None,
+                started_at: Some(200),
+                completed_at: Some(290),
                 truncated: false,
                 items: vec![
                     recorded(
@@ -111,6 +119,10 @@ fn thread() -> ThreadData {
             ThreadTurn {
                 id: "turn-3".into(),
                 completed: false,
+                status: Some("inProgress".into()),
+                error: None,
+                started_at: Some(300),
+                completed_at: None,
                 truncated: false,
                 items: vec![recorded(
                     "agentMessage",
@@ -197,11 +209,15 @@ fn allows_an_earlier_completed_turn_as_the_cutoff() {
 }
 
 #[test]
-fn an_uncut_snapshot_excludes_all_turns_when_none_are_complete() {
+fn an_uncut_snapshot_keeps_every_turn_including_incomplete_history() {
     let mut data = thread();
     data.turns = vec![ThreadTurn {
         id: "pending".into(),
         completed: false,
+        status: Some("inProgress".into()),
+        error: None,
+        started_at: Some(300),
+        completed_at: None,
         truncated: false,
         items: vec![recorded(
             "agentMessage",
@@ -216,7 +232,8 @@ fn an_uncut_snapshot_excludes_all_turns_when_none_are_complete() {
     }];
 
     let snapshot = convert_codex_items(data, None).unwrap();
-    assert!(snapshot.messages.is_empty());
+    assert_eq!(snapshot.messages.len(), 1);
+    assert_eq!(snapshot.messages[0].text, "Still working");
     assert_eq!(snapshot.metadata.cutoff_turn_id, None);
 }
 
@@ -309,6 +326,18 @@ fn validates_and_round_trips_a_valid_snapshot() {
     let parsed = validate_snapshot(&bytes).unwrap();
     assert_eq!(parsed.schema_version, 1);
     assert_eq!(parsed.messages.len(), 2);
+}
+
+#[test]
+fn local_preview_validation_does_not_apply_legacy_summary_size_limits() {
+    let mut snapshot = valid_snapshot();
+    snapshot.messages[0].text = "x".repeat(2 * 1024 * 1024);
+
+    validate_local_snapshot(&snapshot).expect("本机预览和原生包不应受兼容摘要字段限制");
+    assert!(matches!(
+        validate_snapshot(&serde_json::to_vec(&snapshot).unwrap()),
+        Err(SnapshotError::FieldTooLarge)
+    ));
 }
 
 #[test]

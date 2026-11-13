@@ -2,22 +2,25 @@ use crate::{
     codex::{
         client::CodexClient,
         error::CodexError,
-        models::{Page, RecordedThread},
+        models::{Page, RecordedThread, ThreadSummary},
     },
     db::ImportDatabase,
     imports::{ImportError, ImportRecord, ImportService},
     native::{self, NativeBundleError},
     pairing::{InvitationManager, InvitationState},
     preview::{convert::convert_preview_timeline, schema::PreviewTimelineV1},
-    snapshot::{convert::convert_codex_items, schema::SnapshotV1, validate::validate_snapshot},
+    snapshot::{
+        convert::convert_codex_items, schema::SnapshotV1, validate::validate_local_snapshot,
+    },
     transfer::TransferServer,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     net::{IpAddr, Ipv4Addr},
+    path::{Component, Path, PathBuf},
     sync::{Arc, Mutex},
 };
 use tauri::{Manager, Runtime as TauriRuntime, State, WebviewWindow, ipc::Channel};
@@ -42,6 +45,15 @@ pub struct CodexStatus {
     pub state: String,
     pub detail: String,
     pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexProject {
+    pub path: String,
+    pub name: String,
+    pub thread_count: usize,
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -124,7 +136,13 @@ pub struct GeneratedPreview {
 
 #[derive(Default)]
 struct PreviewRegistry {
-    entries: Mutex<HashMap<String, PreparedPreview>>,
+    state: Mutex<PreviewRegistryState>,
+}
+
+#[derive(Default)]
+struct PreviewRegistryState {
+    entries: HashMap<String, PreparedPreview>,
+    cancelled: HashSet<String>,
 }
 
 impl PreviewRegistry {
@@ -136,14 +154,17 @@ impl PreviewRegistry {
         native_bundle: Vec<u8>,
     ) -> Result<(), CommandError> {
         request.validate()?;
-        let mut entries = self.entries.lock().expect("预览锁已中毒");
-        if entries.contains_key(&request.preview_id) {
+        let mut state = self.state.lock().expect("预览锁已中毒");
+        if state.cancelled.remove(&request.preview_id) {
+            return Err(CommandError::new("cancelled", "预览已取消，忽略迟到结果"));
+        }
+        if state.entries.contains_key(&request.preview_id) {
             return Err(CommandError::new(
                 "invalidPreview",
                 "预览标识重复，请重新生成分享预览",
             ));
         }
-        entries.insert(
+        state.entries.insert(
             request.preview_id.clone(),
             PreparedPreview {
                 thread_id: request.thread_id.clone(),
@@ -162,9 +183,10 @@ impl PreviewRegistry {
     ) -> Result<(SnapshotV1, Vec<u8>), CommandError> {
         validate_preview_id(preview_id)?;
         let preview = self
-            .entries
+            .state
             .lock()
             .expect("预览锁已中毒")
+            .entries
             .get(preview_id)
             .cloned()
             .ok_or_else(|| CommandError::new("invalidPreview", "分享预览已失效，请重新生成"))?;
@@ -180,9 +202,10 @@ impl PreviewRegistry {
     fn display_for_preview(&self, preview_id: &str) -> Result<GeneratedPreview, CommandError> {
         validate_preview_id(preview_id)?;
         let preview = self
-            .entries
+            .state
             .lock()
             .expect("预览锁已中毒")
+            .entries
             .get(preview_id)
             .cloned()
             .ok_or_else(|| CommandError::new("invalidPreview", "分享预览已失效，请重新生成"))?;
@@ -194,15 +217,21 @@ impl PreviewRegistry {
 
     fn cancel(&self, preview_id: &str) {
         if !preview_id.is_empty() {
-            self.entries
-                .lock()
-                .expect("预览锁已中毒")
-                .remove(preview_id);
+            let mut state = self.state.lock().expect("预览锁已中毒");
+            if state.entries.remove(preview_id).is_none() {
+                if state.cancelled.len() >= MAX_CANCELLED_PREVIEW_IDS
+                    && let Some(stale) = state.cancelled.iter().next().cloned()
+                {
+                    state.cancelled.remove(&stale);
+                }
+                state.cancelled.insert(preview_id.to_owned());
+            }
         }
     }
 }
 
 const MAX_PREVIEW_ID_LENGTH: usize = 128;
+const MAX_CANCELLED_PREVIEW_IDS: usize = 1024;
 
 fn validate_preview_id(preview_id: &str) -> Result<(), CommandError> {
     if preview_id.trim().is_empty() || preview_id.len() > MAX_PREVIEW_ID_LENGTH {
@@ -311,6 +340,10 @@ mod preview_registry_tests {
                 turns: vec![ThreadTurn {
                     id: "turn-1".into(),
                     completed: true,
+                    status: Some("completed".into()),
+                    error: None,
+                    started_at: Some(1),
+                    completed_at: Some(2),
                     truncated: false,
                     items: vec![RecordedItem {
                         id: Some("agent-1".into()),
@@ -430,6 +463,25 @@ mod preview_registry_tests {
             .snapshot_for_share("thread-1", "preview-1")
             .expect_err("取消后的预览令牌必须失效");
         assert_eq!(error.code, "invalidPreview");
+    }
+
+    #[test]
+    fn cancellation_before_generation_finishes_rejects_the_late_preview() {
+        let registry = PreviewRegistry::default();
+        let preview_request = request("thread-1", "preview-late");
+        registry.cancel("preview-late");
+
+        let error = registry
+            .insert(
+                &preview_request,
+                snapshot("thread-1"),
+                timeline("thread-1"),
+                vec![1, 2, 3],
+            )
+            .expect_err("取消后迟到的预览不能重新插入");
+
+        assert_eq!(error.code, "cancelled");
+        assert!(registry.display_for_preview("preview-late").is_err());
     }
 
     #[test]
@@ -649,6 +701,65 @@ pub async fn list_threads(
 }
 
 #[tauri::command]
+pub async fn list_codex_projects(
+    state: State<'_, AppState>,
+) -> Result<Vec<CodexProject>, CommandError> {
+    let threads = run_codex_command(&state, move |client| {
+        let mut threads = Vec::new();
+        let mut cursor = None;
+        for _ in 0..200 {
+            let page = client.list_threads(cursor).map_err(CommandError::from)?;
+            threads.extend(page.data);
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                return Ok(threads);
+            }
+        }
+        Err(CommandError::new("codexUnavailable", "Codex 项目分页过多"))
+    })
+    .await?;
+    Ok(summarize_codex_projects(threads))
+}
+
+fn summarize_codex_projects(threads: Vec<ThreadSummary>) -> Vec<CodexProject> {
+    let mut projects = HashMap::<String, CodexProject>::new();
+    let mut seen_threads = HashSet::new();
+    for thread in threads {
+        if !seen_threads.insert(thread.id.clone()) {
+            continue;
+        }
+        let path = PathBuf::from(thread.cwd.trim());
+        if !path.is_dir() {
+            continue;
+        }
+        let path = path.canonicalize().unwrap_or(path);
+        let path_string = path.to_string_lossy().into_owned();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&path_string)
+            .to_owned();
+        let project = projects.entry(path_string.clone()).or_insert(CodexProject {
+            path: path_string,
+            name,
+            thread_count: 0,
+            updated_at: thread.updated_at,
+        });
+        project.thread_count += 1;
+        project.updated_at = project.updated_at.max(thread.updated_at);
+    }
+    let mut projects = projects.into_values().collect::<Vec<_>>();
+    projects.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    projects
+}
+
+#[tauri::command]
 pub async fn list_turns(
     state: State<'_, AppState>,
     thread_id: String,
@@ -681,9 +792,7 @@ fn prepare_preview_data(
             "预览截止轮次不一致，请重新生成",
         ));
     }
-    let bytes = serde_json::to_vec(&snapshot)
-        .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
-    let validated = validate_snapshot(&bytes)
+    validate_local_snapshot(&snapshot)
         .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
     let rollout_path = recorded.rollout_path.ok_or_else(|| {
         CommandError::new(
@@ -692,8 +801,8 @@ fn prepare_preview_data(
         )
     })?;
     let native_bundle =
-        native::build_bundle(codex_home, std::path::Path::new(&rollout_path), &validated)?;
-    Ok((validated, timeline, native_bundle))
+        native::build_bundle(codex_home, std::path::Path::new(&rollout_path), &snapshot)?;
+    Ok((snapshot, timeline, native_bundle))
 }
 
 #[tauri::command]
@@ -1131,6 +1240,16 @@ pub fn delete_staged_snapshot(
 pub struct ImportRequest {
     pub share_id: String,
     pub project_path: String,
+    #[serde(default)]
+    pub session_name: Option<String>,
+    #[serde(default)]
+    pub conflict_policy: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportConflictReport {
+    pub files: Vec<String>,
 }
 
 #[tauri::command]
@@ -1139,14 +1258,52 @@ pub fn import_snapshot(
     state: State<'_, ReceiveState>,
     request: ImportRequest,
 ) -> Result<ImportRecord, CommandError> {
+    let (app_data_dir, snapshot_path, bytes) =
+        read_staged_bundle(&window, &state, &request.share_id)?;
+    let project = std::path::Path::new(&request.project_path);
+    let database_path = app_data_dir.join("imports.db");
+    let database = ImportDatabase::open(database_path)
+        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
+    let conflict_policy = parse_import_conflict_policy(request.conflict_policy.as_deref())?;
+    state
+        .import_service
+        .create_local_thread_with_options(
+            &bytes,
+            project,
+            &snapshot_path,
+            &database,
+            request.session_name.as_deref(),
+            conflict_policy,
+        )
+        .map_err(map_import_error)
+}
+
+#[tauri::command]
+pub fn inspect_import_conflicts(
+    window: WebviewWindow<impl TauriRuntime>,
+    state: State<'_, ReceiveState>,
+    share_id: String,
+) -> Result<ImportConflictReport, CommandError> {
+    let (_, _, bytes) = read_staged_bundle(&window, &state, &share_id)?;
+    let bundle = native::parse_bundle(&bytes)?;
+    let codex_home = native::codex_home()?;
+    let files = native::inspect_bundle_conflicts(&codex_home, &bundle)?;
+    Ok(ImportConflictReport { files })
+}
+
+fn read_staged_bundle<R: TauriRuntime>(
+    window: &WebviewWindow<R>,
+    state: &ReceiveState,
+    share_id: &str,
+) -> Result<(PathBuf, PathBuf, Vec<u8>), CommandError> {
     let staged = state
         .staged
         .lock()
         .expect("暂存锁已中毒")
-        .get(&request.share_id)
+        .get(share_id)
         .cloned()
         .ok_or_else(|| CommandError::new("notFound", "找不到本机暂存快照，请重新接收分享"))?;
-    let snapshot_path = std::path::PathBuf::from(&staged.snapshot_path);
+    let snapshot_path = PathBuf::from(&staged.snapshot_path);
     let bytes = fs::read(&snapshot_path).map_err(|error| {
         CommandError::new(
             "invalidNativeBundle",
@@ -1157,15 +1314,21 @@ pub fn import_snapshot(
     let app_data_dir = window.path().app_data_dir().map_err(|error| {
         CommandError::new("databaseFailed", format!("无法定位应用数据目录：{error}"))
     })?;
-    validate_staged_snapshot_path(&app_data_dir, &snapshot_path, &request.share_id)?;
-    let project = std::path::Path::new(&request.project_path);
-    let database_path = app_data_dir.join("imports.db");
-    let database = ImportDatabase::open(database_path)
-        .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
-    state
-        .import_service
-        .create_local_thread(&bytes, project, &snapshot_path, &database)
-        .map_err(map_import_error)
+    validate_staged_snapshot_path(&app_data_dir, &snapshot_path, share_id)?;
+    Ok((app_data_dir, snapshot_path, bytes))
+}
+
+fn parse_import_conflict_policy(
+    value: Option<&str>,
+) -> Result<native::InstallConflictPolicy, CommandError> {
+    match value.unwrap_or("preserveLocal") {
+        "preserveLocal" => Ok(native::InstallConflictPolicy::PreserveLocal),
+        "replaceLocal" => Ok(native::InstallConflictPolicy::ReplaceLocal),
+        _ => Err(CommandError::new(
+            "invalidConflictPolicy",
+            "会话冲突处理方式无效，请重新选择",
+        )),
+    }
 }
 
 #[tauri::command]
@@ -1231,12 +1394,16 @@ pub fn retry_import_record(
     database
         .mark_retried(import_id, retried_at)
         .map_err(|error| CommandError::new("databaseFailed", error.to_string()))?;
+    let session_name =
+        (!previous.session_name.trim().is_empty()).then_some(previous.session_name.as_str());
     let mut record = service
-        .create_local_thread(
+        .create_local_thread_with_options(
             &bytes,
             std::path::Path::new(&previous.project_path),
             &snapshot_path,
             database,
+            session_name,
+            native::InstallConflictPolicy::PreserveLocal,
         )
         .map_err(map_import_error)?;
     record.id = import_id.to_owned();
@@ -1413,9 +1580,93 @@ pub async fn select_project_directory(
         .map_err(|_| CommandError::new("dialogFailed", "目录选择器未返回结果"))
 }
 
+#[tauri::command]
+pub async fn select_project_parent(
+    window: WebviewWindow<impl TauriRuntime>,
+) -> Result<Option<String>, CommandError> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    window
+        .dialog()
+        .file()
+        .set_title("选择新项目的父目录")
+        .pick_folder(move |selected| {
+            let _ = sender.send(
+                selected
+                    .and_then(|path| path.into_path().ok())
+                    .map(|path| path.to_string_lossy().into_owned()),
+            );
+        });
+    receiver
+        .await
+        .map_err(|_| CommandError::new("dialogFailed", "目录选择器未返回结果"))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateProjectRequest {
+    pub parent_path: String,
+    pub project_name: String,
+}
+
+#[tauri::command]
+pub fn create_project_directory(request: CreateProjectRequest) -> Result<String, CommandError> {
+    create_project_directory_at(
+        Path::new(request.parent_path.trim()),
+        request.project_name.trim(),
+    )
+    .map(|path| path.to_string_lossy().into_owned())
+}
+
+fn create_project_directory_at(parent: &Path, project_name: &str) -> Result<PathBuf, CommandError> {
+    if !parent.is_dir() {
+        return Err(CommandError::new(
+            "invalidProject",
+            "请选择一个存在的父目录",
+        ));
+    }
+    if project_name.is_empty() {
+        return Err(CommandError::new("invalidProject", "项目名称不能为空"));
+    }
+    if project_name.chars().count() > 80 {
+        return Err(CommandError::new(
+            "invalidProject",
+            "项目名称最多允许 80 个字符",
+        ));
+    }
+    if project_name.chars().any(char::is_control) {
+        return Err(CommandError::new(
+            "invalidProject",
+            "项目名称不能包含控制字符",
+        ));
+    }
+    let mut components = Path::new(project_name).components();
+    let valid_component = matches!(
+        components.next(),
+        Some(Component::Normal(value)) if value == std::ffi::OsStr::new(project_name)
+    );
+    if !valid_component || components.next().is_some() {
+        return Err(CommandError::new(
+            "invalidProject",
+            "项目名称不能包含路径分隔符",
+        ));
+    }
+    let target = parent.join(project_name);
+    if target.exists() {
+        return Err(CommandError::new(
+            "projectExists",
+            "同名项目目录已存在，请从 Codex 已有项目中直接选择",
+        ));
+    }
+    fs::create_dir(&target).map_err(|error| {
+        CommandError::new("invalidProject", format!("无法创建项目目录：{error}"))
+    })?;
+    Ok(target)
+}
+
 fn map_import_error(error: ImportError) -> CommandError {
     let code = match &error {
         ImportError::InvalidProject(_) => "invalidProject",
+        ImportError::InvalidName(_) => "invalidName",
         ImportError::PromptTooLarge | ImportError::Snapshot(_) => "invalidSnapshot",
         ImportError::Native(_) => "invalidNativeBundle",
         ImportError::Codex(_) => "codexUnavailable",
@@ -1427,6 +1678,24 @@ fn map_import_error(error: ImportError) -> CommandError {
 #[cfg(test)]
 mod local_address_tests {
     use super::*;
+    use crate::codex::models::ThreadSummary;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn unique_temp_dir(label: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("系统时间有效")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "agentbridge-command-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("创建测试目录");
+        path
+    }
 
     #[test]
     fn physical_lan_interfaces_are_preferred_over_virtual_adapters() {
@@ -1443,6 +1712,95 @@ mod local_address_tests {
 
         assert_eq!(addresses[0].name, "Wi-Fi");
         assert_eq!(addresses[1].name, "vEthernet (WSL)");
+    }
+
+    #[test]
+    fn codex_threads_are_grouped_into_existing_local_projects() {
+        let root = unique_temp_dir("projects");
+        let alpha = root.join("alpha");
+        let beta = root.join("beta");
+        fs::create_dir_all(&alpha).expect("创建 alpha");
+        fs::create_dir_all(&beta).expect("创建 beta");
+        let threads = vec![
+            ThreadSummary {
+                id: "thread-1".into(),
+                title: Some("alpha one".into()),
+                preview: String::new(),
+                cwd: alpha.to_string_lossy().into_owned(),
+                created_at: 1,
+                updated_at: 10,
+                repository_id: None,
+            },
+            ThreadSummary {
+                id: "thread-2".into(),
+                title: Some("alpha two".into()),
+                preview: String::new(),
+                cwd: alpha.to_string_lossy().into_owned(),
+                created_at: 2,
+                updated_at: 30,
+                repository_id: None,
+            },
+            ThreadSummary {
+                id: "thread-3".into(),
+                title: Some("beta".into()),
+                preview: String::new(),
+                cwd: beta.to_string_lossy().into_owned(),
+                created_at: 3,
+                updated_at: 20,
+                repository_id: None,
+            },
+        ];
+
+        let projects = summarize_codex_projects(threads);
+
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].name, "alpha");
+        assert_eq!(projects[0].thread_count, 2);
+        assert_eq!(projects[0].updated_at, 30);
+        assert_eq!(
+            projects[0].path,
+            alpha
+                .canonicalize()
+                .expect("规范化 alpha")
+                .to_string_lossy()
+        );
+        assert_eq!(projects[1].name, "beta");
+        fs::remove_dir_all(root).expect("清理测试目录");
+    }
+
+    #[test]
+    fn creates_a_new_project_directory_under_an_existing_parent() {
+        let root = unique_temp_dir("new-project");
+
+        let created = create_project_directory_at(&root, "共享项目").expect("应创建新项目目录");
+
+        assert_eq!(created, root.join("共享项目"));
+        assert!(created.is_dir());
+        assert!(
+            create_project_directory_at(&root, "共享项目")
+                .expect_err("同名目录不能静默覆盖")
+                .message
+                .contains("已存在")
+        );
+        fs::remove_dir_all(root).expect("清理测试目录");
+    }
+
+    #[test]
+    fn import_conflict_policy_defaults_to_preserving_local_files() {
+        assert_eq!(
+            parse_import_conflict_policy(None).expect("默认策略"),
+            native::InstallConflictPolicy::PreserveLocal
+        );
+        assert_eq!(
+            parse_import_conflict_policy(Some("replaceLocal")).expect("覆盖策略"),
+            native::InstallConflictPolicy::ReplaceLocal
+        );
+        assert_eq!(
+            parse_import_conflict_policy(Some("unexpected"))
+                .expect_err("未知策略必须拒绝")
+                .code,
+            "invalidConflictPolicy"
+        );
     }
 }
 

@@ -73,6 +73,10 @@ fn full_thread() -> ThreadData {
             ThreadTurn {
                 id: "turn-1".into(),
                 completed: true,
+                status: Some("completed".into()),
+                error: None,
+                started_at: Some(100),
+                completed_at: Some(190),
                 truncated: false,
                 items: vec![
                     recorded(
@@ -178,6 +182,10 @@ fn full_thread() -> ThreadData {
             ThreadTurn {
                 id: "turn-2".into(),
                 completed: true,
+                status: Some("completed".into()),
+                error: None,
+                started_at: Some(200),
+                completed_at: Some(290),
                 truncated: false,
                 items: vec![recorded(
                     "agentMessage",
@@ -193,6 +201,10 @@ fn full_thread() -> ThreadData {
             ThreadTurn {
                 id: "turn-3".into(),
                 completed: false,
+                status: Some("inProgress".into()),
+                error: None,
+                started_at: Some(300),
+                completed_at: None,
                 truncated: false,
                 items: vec![recorded(
                     "agentMessage",
@@ -276,6 +288,74 @@ fn command_without_output_keeps_command_status_and_duration() {
     assert_eq!(command.blocks[0].content, "false");
     assert_eq!(command.blocks[1].content, "无可读输出");
     assert!(!command.blocks[1].default_expanded);
+    assert!(command.title.contains("exit 1"));
+}
+
+#[test]
+fn failed_and_interrupted_turns_keep_status_error_and_turn_timestamps() {
+    let mut thread = full_thread();
+    thread.turns[1].status = Some("failed".into());
+    thread.turns[1].error = Some(json!({"message": "上游服务失败"}));
+    thread.turns[2].status = Some("interrupted".into());
+    thread.turns[2].error = Some(json!({"message": "用户中断了轮次"}));
+
+    let timeline = super::convert::convert_preview_timeline(&thread, None).unwrap();
+
+    assert_eq!(timeline.turns.len(), 3);
+    assert_eq!(timeline.turns[1].status, "failed");
+    assert_eq!(timeline.turns[1].started_at, Some(200));
+    assert_eq!(timeline.turns[1].completed_at, Some(290));
+    let failed_error = timeline.turns[1]
+        .items
+        .last()
+        .expect("失败轮次应保留错误条目");
+    assert_eq!(failed_error.kind, PreviewItemKind::Error);
+    assert!(failed_error.blocks[0].content.contains("上游服务失败"));
+
+    assert_eq!(timeline.turns[2].status, "interrupted");
+    assert_eq!(
+        timeline.turns[2]
+            .items
+            .last()
+            .expect("中断轮次应保留错误条目")
+            .status
+            .as_deref(),
+        Some("interrupted")
+    );
+}
+
+#[test]
+fn generated_image_preview_never_exposes_inline_binary_data() {
+    let mut thread = full_thread();
+    thread.turns.truncate(1);
+    thread.turns[0].items = vec![recorded(
+        "imageGeneration",
+        "generated-image",
+        130,
+        json!({
+            "type": "imageGeneration",
+            "id": "generated-image",
+            "result": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",
+            "inputImages": [
+                {"path": "/tmp/input.png"},
+                {"data": "AAABBBCCCDDD"}
+            ]
+        }),
+    )];
+
+    let timeline = super::convert::convert_preview_timeline(&thread, None).unwrap();
+    let image = &timeline.turns[0].items[0];
+    let visible_content = image
+        .blocks
+        .iter()
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(visible_content.contains("/tmp/input.png"));
+    assert!(visible_content.contains("预览不展开内联图片数据"));
+    assert!(!visible_content.contains("iVBORw0KGgo"));
+    assert!(!visible_content.contains("AAABBBCCCDDD"));
 }
 
 #[test]

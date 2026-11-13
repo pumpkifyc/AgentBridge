@@ -295,15 +295,62 @@ fn full_fidelity_items_page() -> Value {
                 "fileId": "generated-image-1"
             }), 195),
             item_entry("turn-1", json!({
-                "type": "error",
-                "id": "error-full",
-                "message": "一个可折叠的历史错误"
-            }), 198),
-            item_entry("turn-1", json!({
                 "type": "futureItem",
                 "id": "future-full",
                 "payloadValue": 42
             }), 200)
+        ],
+        "nextCursor": null
+    })
+}
+
+fn terminal_turns_page() -> Value {
+    json!({
+        "data": [
+            {
+                "id": "turn-completed",
+                "status": "completed",
+                "startedAt": 100,
+                "completedAt": 190,
+                "error": null
+            },
+            {
+                "id": "turn-failed",
+                "status": "failed",
+                "startedAt": 200,
+                "completedAt": 290,
+                "error": {"message": "上游服务失败", "codexErrorInfo": "other"}
+            },
+            {
+                "id": "turn-interrupted",
+                "status": "interrupted",
+                "startedAt": 300,
+                "completedAt": 390,
+                "error": {"message": "用户中断了轮次"}
+            }
+        ],
+        "nextCursor": null
+    })
+}
+
+fn terminal_items_page() -> Value {
+    json!({
+        "data": [
+            item_entry("turn-completed", json!({
+                "type": "agentMessage",
+                "id": "agent-completed",
+                "text": "已完成"
+            }), 120),
+            item_entry("turn-failed", json!({
+                "type": "agentMessage",
+                "id": "agent-failed",
+                "text": "失败前输出"
+            }), 220),
+            item_entry("turn-interrupted", json!({
+                "type": "agentMessage",
+                "id": "agent-interrupted",
+                "text": "中断前输出"
+            }), 320)
         ],
         "nextCursor": null
     })
@@ -403,6 +450,8 @@ fn main() {
                             "nextCursor": null
                         }
                     }));
+                } else if mode == "terminal-turns" {
+                    emit(json!({"id": id, "result": terminal_turns_page()}));
                 } else {
                     let cursor = request["params"]["cursor"].as_str();
                     emit(json!({"id": id, "result": thread_turns_page(cursor)}));
@@ -428,6 +477,8 @@ fn main() {
                     let cursor = request["params"]["cursor"].as_str();
                     if mode == "full-fidelity" {
                         emit(json!({"id": id, "result": full_fidelity_items_page()}));
+                    } else if mode == "terminal-turns" {
+                        emit(json!({"id": id, "result": terminal_items_page()}));
                     } else if mode == "current-protocol" && turn_id.is_empty() {
                         emit(json!({
                             "id": id,

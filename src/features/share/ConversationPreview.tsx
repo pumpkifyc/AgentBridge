@@ -81,7 +81,7 @@ export function ConversationPreview({ timeline, snapshot, loading, error }: Prop
           <small>（仅作说明，接收方需选择自己的项目目录）</small>
         </dd>
         <dt>截止轮次</dt>
-        <dd>{timeline.cutoffTurnId || "最近一个已完成轮次"}</dd>
+        <dd>{timeline.cutoffTurnId || "完整会话（未截断）"}</dd>
       </dl>
       {timeline.notices.length > 0 && (
         <div className="preview-notices" role="status">

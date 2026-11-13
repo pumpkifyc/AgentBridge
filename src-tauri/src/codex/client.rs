@@ -376,6 +376,10 @@ impl CodexClient {
                 ThreadTurn {
                     id: turn.id,
                     completed: turn.completed,
+                    status: turn.status,
+                    error: turn.error,
+                    started_at: turn.started_at,
+                    completed_at: turn.completed_at,
                     truncated: false,
                     items,
                 }
@@ -606,6 +610,8 @@ struct TurnWire {
     id: String,
     status: String,
     #[serde(default)]
+    error: Option<Value>,
+    #[serde(default)]
     started_at: Option<i64>,
     #[serde(default)]
     completed_at: Option<i64>,
@@ -616,6 +622,8 @@ impl From<TurnWire> for TurnSummary {
         Self {
             id: turn.id,
             completed: turn.status == "completed",
+            status: Some(turn.status),
+            error: turn.error,
             started_at: turn.started_at,
             completed_at: turn.completed_at,
             items: Vec::new(),

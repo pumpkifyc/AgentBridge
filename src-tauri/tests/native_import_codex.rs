@@ -73,7 +73,7 @@ fn installs_a_bundle_and_forks_a_native_thread_without_touching_real_codex_home(
     let project = root.join("receiver-project");
     fs::create_dir_all(&project).expect("创建接收方项目");
     let mut client = CodexClient::connect_with_executable_and_home(
-        resolve_codex_executable().unwrap(),
+        resolve_codex_executable().expect("找不到 Codex CLI，无法验证原生 thread/fork"),
         &codex_home,
     )
     .expect("启动临时 CODEX_HOME 的 Codex App Server");

@@ -72,11 +72,7 @@ pub fn convert_codex_items(
             .ok_or(SnapshotError::InvalidCutoff)?
             + 1
     } else {
-        thread
-            .turns
-            .iter()
-            .rposition(|turn| turn.completed)
-            .map_or(0, |index| index + 1)
+        thread.turns.len()
     };
 
     let mut messages = Vec::new();
@@ -188,12 +184,7 @@ pub fn convert_codex_items(
             title,
             created_at: thread.created_at,
             updated_at: thread.updated_at,
-            cutoff_turn_id: cutoff_turn_id.or_else(|| {
-                included_turn_count
-                    .checked_sub(1)
-                    .and_then(|index| thread.turns.get(index))
-                    .map(|turn| turn.id.clone())
-            }),
+            cutoff_turn_id,
             project_name,
             repository_id: thread.repository_id,
             source_working_directory: thread.working_directory,

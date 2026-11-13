@@ -752,6 +752,130 @@ select {
   min-width: 0;
 }
 
+.project-picker {
+  display: grid;
+  gap: 14px;
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid #dce3ea;
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+
+.project-picker h3,
+.conflict-dialog h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.project-picker input,
+.session-name-input {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #c7ced7;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.session-name-input {
+  width: min(100%, 520px);
+}
+
+.segmented-control {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 9px;
+  background: #edf1f5;
+}
+
+.segmented-control button {
+  flex: 1 1 150px;
+  padding: 8px 10px;
+  color: #5c6875;
+  background: transparent;
+  font-size: 12px;
+}
+
+.segmented-control button.active {
+  color: #274e76;
+  background: #fff;
+  box-shadow: 0 1px 5px rgb(32 50 70 / 12%);
+}
+
+.project-mode-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.project-mode-panel .action-row {
+  align-items: stretch;
+}
+
+.project-create-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.project-choice-list {
+  display: grid;
+  max-height: 250px;
+  gap: 7px;
+  padding-right: 4px;
+  overflow: auto;
+}
+
+.project-choice {
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  border: 1px solid #dfe4ea;
+  color: #1f2b37;
+  background: #fff;
+  text-align: left;
+}
+
+.project-choice:hover,
+.project-choice.selected {
+  border-color: #7ca9d5;
+  background: #eef5fc;
+}
+
+.project-choice small {
+  max-width: 100%;
+  overflow: hidden;
+  color: #68727f;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.success-text {
+  color: #2c6b45;
+}
+
+.conflict-dialog {
+  max-width: none;
+  margin: 18px 0 0;
+  border-color: #d9ad65;
+  color: #59421f;
+  background: #fffaf1;
+}
+
+.conflict-file-list {
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.danger-action {
+  border: 1px solid #b94a48;
+  color: #fff;
+  background: #a63f3d;
+}
+
 .history-list {
   display: grid;
   gap: 12px;
@@ -781,6 +905,10 @@ select {
   }
 
   .share-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .project-create-grid {
     grid-template-columns: 1fr;
   }
 }

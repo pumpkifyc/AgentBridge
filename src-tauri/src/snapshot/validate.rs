@@ -84,6 +84,20 @@ pub fn validate_snapshot(bytes: &[u8]) -> Result<SnapshotV1, SnapshotError> {
         return Err(SnapshotError::FieldTooLarge);
     }
 
+    validate_message_order(&snapshot)?;
+    Ok(snapshot)
+}
+
+pub fn validate_local_snapshot(snapshot: &SnapshotV1) -> Result<(), SnapshotError> {
+    if snapshot.schema_version != 1 {
+        return Err(SnapshotError::UnsupportedVersion(
+            snapshot.schema_version.into(),
+        ));
+    }
+    validate_message_order(snapshot)
+}
+
+fn validate_message_order(snapshot: &SnapshotV1) -> Result<(), SnapshotError> {
     let mut last_turn = None;
     let mut last_timestamp = None;
     for message in &snapshot.messages {
@@ -100,5 +114,5 @@ pub fn validate_snapshot(bytes: &[u8]) -> Result<SnapshotV1, SnapshotError> {
         }
     }
 
-    Ok(snapshot)
+    Ok(())
 }

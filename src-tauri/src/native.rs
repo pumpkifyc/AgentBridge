@@ -6,7 +6,7 @@ use std::{
     collections::HashSet,
     ffi::OsStr,
     fs,
-    io::{BufRead, BufReader, Cursor, Read},
+    io::{BufRead, BufReader, Cursor, ErrorKind, Read},
     path::{Component, Path, PathBuf},
 };
 
@@ -43,6 +43,78 @@ pub struct NativeRolloutFile {
 pub struct ParsedNativeBundle {
     pub manifest: NativeBundleManifest,
     pub files: Vec<Vec<u8>>,
+}
+
+#[derive(Debug)]
+struct ReplacedRollout {
+    target: PathBuf,
+    backup: PathBuf,
+}
+
+#[derive(Debug, Default)]
+pub struct NativeBundleInstall {
+    policy: InstallConflictPolicy,
+    replaced: Vec<ReplacedRollout>,
+}
+
+impl NativeBundleInstall {
+    pub fn complete(&mut self) -> Result<(), NativeBundleError> {
+        match self.policy {
+            InstallConflictPolicy::PreserveLocal => self.restore(),
+            InstallConflictPolicy::ReplaceLocal => self.commit(),
+        }
+    }
+
+    pub fn restore(&mut self) -> Result<(), NativeBundleError> {
+        while let Some(replaced) = self.replaced.pop() {
+            let remove_result = fs::remove_file(&replaced.target);
+            if let Err(error) = remove_result
+                && error.kind() != ErrorKind::NotFound
+            {
+                let error = NativeBundleError::Io(format!(
+                    "无法移除临时导入文件 {}：{error}",
+                    replaced.target.display()
+                ));
+                self.replaced.push(replaced);
+                return Err(error);
+            }
+            if let Err(error) = fs::rename(&replaced.backup, &replaced.target) {
+                let error = NativeBundleError::Io(format!(
+                    "无法恢复本机会话文件 {}（备份保留在 {}）：{error}",
+                    replaced.target.display(),
+                    replaced.backup.display()
+                ));
+                self.replaced.push(replaced);
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn commit(&mut self) -> Result<(), NativeBundleError> {
+        while let Some(replaced) = self.replaced.pop() {
+            if let Err(error) = fs::remove_file(&replaced.backup) {
+                self.replaced.push(replaced);
+                return Err(NativeBundleError::Io(format!(
+                    "无法提交会话覆盖，原文件备份仍保留：{error}"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Drop for NativeBundleInstall {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum InstallConflictPolicy {
+    #[default]
+    PreserveLocal,
+    ReplaceLocal,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -280,8 +352,19 @@ pub fn parse_bundle(bytes: &[u8]) -> Result<ParsedNativeBundle, NativeBundleErro
 pub fn install_bundle(
     codex_home: &Path,
     bundle: &ParsedNativeBundle,
-) -> Result<Vec<PathBuf>, NativeBundleError> {
-    let mut installed = Vec::with_capacity(bundle.files.len());
+) -> Result<NativeBundleInstall, NativeBundleError> {
+    install_bundle_with_policy(codex_home, bundle, InstallConflictPolicy::PreserveLocal)
+}
+
+pub fn install_bundle_with_policy(
+    codex_home: &Path,
+    bundle: &ParsedNativeBundle,
+    policy: InstallConflictPolicy,
+) -> Result<NativeBundleInstall, NativeBundleError> {
+    let mut installation = NativeBundleInstall {
+        policy,
+        replaced: Vec::new(),
+    };
     for (file, bytes) in bundle.manifest.files.iter().zip(&bundle.files) {
         let relative = Path::new(&file.relative_path);
         validate_relative_path(&file.relative_path)?;
@@ -290,26 +373,40 @@ pub fn install_bundle(
             let existing =
                 fs::read(&target).map_err(|error| NativeBundleError::Io(error.to_string()))?;
             if sha256_hex(&existing) != file.sha256 {
-                return Err(NativeBundleError::Conflict(file.relative_path.clone()));
+                install_conflicting_file(&target, bytes, &mut installation)?;
+                continue;
             }
-            installed.push(target);
             continue;
         }
         let parent = target
             .parent()
             .ok_or_else(|| NativeBundleError::Invalid("目标路径无效".into()))?;
         fs::create_dir_all(parent).map_err(|error| NativeBundleError::Io(error.to_string()))?;
-        let temporary = parent.join(format!(
-            ".agentbridge-{}-{}.tmp",
-            std::process::id(),
-            installed.len()
-        ));
+        let temporary = temporary_path(&target, "install")?;
         fs::write(&temporary, bytes).map_err(|error| NativeBundleError::Io(error.to_string()))?;
         fs::rename(&temporary, &target)
             .map_err(|error| NativeBundleError::Io(error.to_string()))?;
-        installed.push(target);
     }
-    Ok(installed)
+    Ok(installation)
+}
+
+pub fn inspect_bundle_conflicts(
+    codex_home: &Path,
+    bundle: &ParsedNativeBundle,
+) -> Result<Vec<String>, NativeBundleError> {
+    let mut conflicts = Vec::new();
+    for (file, bytes) in bundle.manifest.files.iter().zip(&bundle.files) {
+        validate_relative_path(&file.relative_path)?;
+        let target = codex_home.join(&file.relative_path);
+        if target.exists() {
+            let existing =
+                fs::read(&target).map_err(|error| NativeBundleError::Io(error.to_string()))?;
+            if existing != *bytes {
+                conflicts.push(file.relative_path.clone());
+            }
+        }
+    }
+    Ok(conflicts)
 }
 
 pub fn make_thread_visible(
@@ -531,6 +628,59 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+fn install_conflicting_file(
+    target: &Path,
+    bytes: &[u8],
+    installation: &mut NativeBundleInstall,
+) -> Result<(), NativeBundleError> {
+    let temporary = temporary_path(target, "install")?;
+    fs::write(&temporary, bytes).map_err(|error| NativeBundleError::Io(error.to_string()))?;
+    let backup = temporary_path(target, "backup")?;
+    fs::rename(target, &backup).map_err(|error| {
+        let _ = fs::remove_file(&temporary);
+        NativeBundleError::Io(format!(
+            "无法备份本机会话文件 {}：{error}",
+            target.display()
+        ))
+    })?;
+    if let Err(error) = fs::rename(&temporary, target) {
+        let restore_error = fs::rename(&backup, target).err();
+        let detail = restore_error.map_or_else(String::new, |restore| {
+            format!(
+                "；恢复原文件也失败（备份保留在 {}）：{restore}",
+                backup.display()
+            )
+        });
+        return Err(NativeBundleError::Io(format!(
+            "无法临时安装分享会话 {}：{error}{detail}",
+            target.display()
+        )));
+    }
+    installation.replaced.push(ReplacedRollout {
+        target: target.to_path_buf(),
+        backup,
+    });
+    Ok(())
+}
+
+fn temporary_path(target: &Path, purpose: &str) -> Result<PathBuf, NativeBundleError> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| NativeBundleError::Invalid("目标路径无效".into()))?;
+    let name = target
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| NativeBundleError::Invalid("目标文件名无效".into()))?;
+    let mut nonce = [0u8; 8];
+    getrandom::fill(&mut nonce)
+        .map_err(|error| NativeBundleError::Io(format!("无法生成临时文件名：{error}")))?;
+    Ok(parent.join(format!(
+        ".{name}.agentbridge-{}-{}-{purpose}",
+        std::process::id(),
+        hex::encode(nonce)
+    )))
+}
+
 fn truncate_chars(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
 }
@@ -570,6 +720,113 @@ mod tests {
         let parsed = parse_bundle(&bundle).expect("解析会话包");
         assert_eq!(parsed.manifest.source_thread_id, "thread-1");
         assert_eq!(parsed.files[0], fs::read(&path).expect("读取会话"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn conflicting_rollout_is_temporarily_swapped_and_restored_after_import() {
+        let root = std::env::temp_dir().join(format!(
+            "agentbridge-native-conflict-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("系统时间有效")
+                .as_nanos()
+        ));
+        let sessions = root.join("sessions/2026/11/13");
+        fs::create_dir_all(&sessions).expect("创建测试目录");
+        let path = sessions.join("rollout-2026-11-13T00-00-00-thread-1.jsonl");
+        let packaged = b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-1\",\"session_id\":\"thread-1\"}}\n{\"ordinal\":1,\"payload\":\"packaged\"}\n";
+        let local_newer = b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-1\",\"session_id\":\"thread-1\"}}\n{\"ordinal\":1,\"payload\":\"local-newer\"}\n";
+        fs::write(&path, packaged).expect("写入包内会话");
+        let snapshot = SnapshotV1 {
+            schema_version: 1,
+            metadata: crate::snapshot::schema::SnapshotMetadata {
+                source_thread_id: "thread-1".into(),
+                title: "冲突会话".into(),
+                created_at: 1,
+                updated_at: 2,
+                cutoff_turn_id: None,
+                project_name: None,
+                repository_id: None,
+                source_working_directory: None,
+            },
+            messages: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let bundle = parse_bundle(&build_bundle(&root, &path, &snapshot).expect("构建会话包"))
+            .expect("解析会话包");
+        fs::write(&path, local_newer).expect("模拟本机会话继续更新");
+
+        let mut installation = install_bundle(&root, &bundle).expect("冲突会话应可临时安装");
+
+        assert_eq!(fs::read(&path).expect("读取临时安装内容"), packaged);
+        installation.restore().expect("分叉后应恢复本机会话");
+        assert_eq!(fs::read(&path).expect("读取恢复后的本机会话"), local_newer);
+        assert_eq!(
+            fs::read_dir(&sessions)
+                .expect("读取会话目录")
+                .filter_map(Result::ok)
+                .count(),
+            1,
+            "临时备份不能在成功后留在 Codex 会话目录"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn overwrite_policy_keeps_the_packaged_rollout_and_removes_backup() {
+        let root = std::env::temp_dir().join(format!(
+            "agentbridge-native-overwrite-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("系统时间有效")
+                .as_nanos()
+        ));
+        let sessions = root.join("sessions/2026/11/13");
+        fs::create_dir_all(&sessions).expect("创建测试目录");
+        let path = sessions.join("rollout-2026-11-13T00-00-00-thread-overwrite.jsonl");
+        let packaged = b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-overwrite\",\"session_id\":\"thread-overwrite\"}}\n{\"ordinal\":1,\"payload\":\"packaged\"}\n";
+        let local = b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-overwrite\",\"session_id\":\"thread-overwrite\"}}\n{\"ordinal\":1,\"payload\":\"local\"}\n";
+        fs::write(&path, packaged).expect("写入包内会话");
+        let snapshot = SnapshotV1 {
+            schema_version: 1,
+            metadata: crate::snapshot::schema::SnapshotMetadata {
+                source_thread_id: "thread-overwrite".into(),
+                title: "覆盖会话".into(),
+                created_at: 1,
+                updated_at: 2,
+                cutoff_turn_id: None,
+                project_name: None,
+                repository_id: None,
+                source_working_directory: None,
+            },
+            messages: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let bundle = parse_bundle(&build_bundle(&root, &path, &snapshot).expect("构建会话包"))
+            .expect("解析会话包");
+        fs::write(&path, local).expect("模拟本机已有会话");
+        assert_eq!(
+            inspect_bundle_conflicts(&root, &bundle).expect("检查冲突"),
+            vec!["sessions/2026/11/13/rollout-2026-11-13T00-00-00-thread-overwrite.jsonl"]
+        );
+
+        let mut installation =
+            install_bundle_with_policy(&root, &bundle, InstallConflictPolicy::ReplaceLocal)
+                .expect("明确覆盖时应临时安装分享会话");
+        installation.commit().expect("分叉成功后应提交覆盖");
+
+        assert_eq!(fs::read(&path).expect("读取覆盖后的会话"), packaged);
+        assert_eq!(
+            fs::read_dir(&sessions)
+                .expect("读取会话目录")
+                .filter_map(Result::ok)
+                .count(),
+            1,
+            "明确覆盖后不能留下本机旧文件备份"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

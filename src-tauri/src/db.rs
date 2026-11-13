@@ -6,6 +6,7 @@ const MIGRATION: &str = "
 CREATE TABLE IF NOT EXISTS imports (
     id TEXT PRIMARY KEY,
     source_title TEXT NOT NULL,
+    session_name TEXT NOT NULL DEFAULT '',
     local_thread_id TEXT NOT NULL,
     project_path TEXT NOT NULL,
     imported_at INTEGER NOT NULL,
@@ -44,6 +45,24 @@ impl ImportDatabase {
         connection
             .execute_batch(MIGRATION)
             .map_err(|error| DatabaseError::Open(error.to_string()))?;
+        let has_session_name = {
+            let mut statement = connection
+                .prepare("PRAGMA table_info(imports)")
+                .map_err(|error| DatabaseError::Open(error.to_string()))?;
+            statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|error| DatabaseError::Open(error.to_string()))?
+                .filter_map(Result::ok)
+                .any(|name| name == "session_name")
+        };
+        if !has_session_name {
+            connection
+                .execute(
+                    "ALTER TABLE imports ADD COLUMN session_name TEXT NOT NULL DEFAULT ''",
+                    [],
+                )
+                .map_err(|error| DatabaseError::Open(error.to_string()))?;
+        }
         Ok(Self { path })
     }
 
@@ -56,11 +75,12 @@ impl ImportDatabase {
         connection
             .execute(
                 "INSERT INTO imports (
-                    id, source_title, local_thread_id, project_path, imported_at,
+                    id, source_title, session_name, local_thread_id, project_path, imported_at,
                     snapshot_path, status, error, continuation_prompt, retry_count, last_retried_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                  ON CONFLICT(id) DO UPDATE SET
                     source_title = excluded.source_title,
+                    session_name = excluded.session_name,
                     local_thread_id = excluded.local_thread_id,
                     project_path = excluded.project_path,
                     imported_at = excluded.imported_at,
@@ -71,6 +91,7 @@ impl ImportDatabase {
                 params![
                     record.id,
                     record.source_title,
+                    record.session_name,
                     record.local_thread_id,
                     record.project_path,
                     record.imported_at,
@@ -90,7 +111,7 @@ impl ImportDatabase {
         let connection = self.connect()?;
         let mut statement = connection
             .prepare(
-                "SELECT id, source_title, local_thread_id, project_path, imported_at,
+                "SELECT id, source_title, session_name, local_thread_id, project_path, imported_at,
                         snapshot_path, status, error, continuation_prompt, retry_count, last_retried_at
                  FROM imports ORDER BY imported_at DESC",
             )
@@ -100,15 +121,16 @@ impl ImportDatabase {
                 Ok(ImportRecord {
                     id: row.get(0)?,
                     source_title: row.get(1)?,
-                    local_thread_id: row.get(2)?,
-                    project_path: row.get(3)?,
-                    imported_at: row.get(4)?,
-                    snapshot_path: row.get(5)?,
-                    status: row.get(6)?,
-                    error: row.get(7)?,
-                    continuation_prompt: row.get(8)?,
-                    retry_count: row.get(9)?,
-                    last_retried_at: row.get(10)?,
+                    session_name: row.get(2)?,
+                    local_thread_id: row.get(3)?,
+                    project_path: row.get(4)?,
+                    imported_at: row.get(5)?,
+                    snapshot_path: row.get(6)?,
+                    status: row.get(7)?,
+                    error: row.get(8)?,
+                    continuation_prompt: row.get(9)?,
+                    retry_count: row.get(10)?,
+                    last_retried_at: row.get(11)?,
                 })
             })
             .map_err(|error| DatabaseError::Query(error.to_string()))?

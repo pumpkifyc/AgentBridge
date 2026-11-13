@@ -104,7 +104,7 @@ fn read_snapshot_pages_turns_and_items_without_replaying_tool_arguments() {
         snapshot.metadata.source_working_directory.as_deref(),
         Some("/home/source/project")
     );
-    assert_eq!(snapshot.metadata.cutoff_turn_id.as_deref(), Some("turn-2"));
+    assert_eq!(snapshot.metadata.cutoff_turn_id, None);
     assert_eq!(snapshot.messages[0].text, "Fix the login flow");
     assert_eq!(snapshot.messages[2].text, "Add a test");
     assert!(
@@ -157,15 +157,44 @@ fn read_thread_data_preserves_all_item_types_raw_json_and_order() {
             "webSearch",
             "imageView",
             "imageGeneration",
-            "error",
             "futureItem",
         ]
     );
-    assert_eq!(recorded.data.turns[0].items[14].raw["payloadValue"], 42);
+    assert_eq!(recorded.data.turns[0].items[13].raw["payloadValue"], 42);
     assert_eq!(recorded.data.turns[0].items[4].timestamp, Some(130));
     assert_eq!(
-        recorded.data.turns[0].items[14].id.as_deref(),
+        recorded.data.turns[0].items[13].id.as_deref(),
         Some("future-full")
+    );
+
+    drop(client);
+    remove_dir(&dir);
+}
+
+#[test]
+fn read_thread_data_preserves_failed_and_interrupted_turn_state() {
+    let (dir, mut client) = connect("terminal-turns", "terminal-turns");
+    let recorded = client
+        .read_thread_data("source-thread")
+        .expect("应读取终态轮次");
+
+    assert_eq!(recorded.data.turns.len(), 3);
+    assert_eq!(
+        recorded
+            .data
+            .turns
+            .iter()
+            .map(|turn| turn.status.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("completed"), Some("failed"), Some("interrupted")]
+    );
+    assert_eq!(
+        recorded.data.turns[1].error.as_ref().unwrap()["message"],
+        "上游服务失败"
+    );
+    assert_eq!(
+        recorded.data.turns[2].error.as_ref().unwrap()["message"],
+        "用户中断了轮次"
     );
 
     drop(client);

@@ -79,7 +79,9 @@ export function HistoryPage() {
       </ul>
       {pendingDelete && (
         <div className="notice" role="dialog" aria-label="确认删除导入记录">
-          <p>删除「{pendingDelete.sourceTitle}」的本机导入记录和暂存原生会话包？Codex 会话不会被删除。</p>
+          <p>
+            删除「{pendingDelete.sessionName || pendingDelete.sourceTitle}」的本机导入记录和暂存原生会话包？Codex 会话不会被删除。
+          </p>
           <div className="action-row">
             <button type="button" className="primary-action" onClick={() => void remove()}>确认删除</button>
             <button type="button" className="secondary-action" onClick={() => setPendingDelete(null)}>取消</button>

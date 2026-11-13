@@ -14,6 +14,8 @@ pub use store::{ImportStore, StoreError};
 pub struct ImportRecord {
     pub id: String,
     pub source_title: String,
+    #[serde(default)]
+    pub session_name: String,
     pub local_thread_id: String,
     pub project_path: String,
     pub imported_at: i64,
@@ -34,6 +36,8 @@ pub struct ImportRecord {
 pub enum ImportError {
     #[error("项目目录无效：{0}")]
     InvalidProject(String),
+    #[error("会话名称无效：{0}")]
+    InvalidName(String),
     #[error("续接提示超过大小限制")]
     PromptTooLarge,
     #[error("快照无效：{0}")]

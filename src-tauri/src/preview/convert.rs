@@ -24,11 +24,7 @@ pub fn convert_preview_timeline(
             .ok_or(SnapshotError::InvalidCutoff)?
             + 1
     } else {
-        thread
-            .turns
-            .iter()
-            .rposition(|turn| turn.completed)
-            .map_or(0, |index| index + 1)
+        thread.turns.len()
     };
 
     let mut unknown_items = 0;
@@ -42,17 +38,8 @@ pub fn convert_preview_timeline(
         .iter()
         .take(included_turn_count)
         .enumerate()
-        .map(|(turn_index, turn)| PreviewTurn {
-            id: turn.id.clone(),
-            index: turn_index,
-            status: if turn.completed {
-                "completed".into()
-            } else {
-                "incomplete".into()
-            },
-            started_at: turn.items.iter().filter_map(|item| item.timestamp).min(),
-            completed_at: turn.items.iter().filter_map(|item| item.timestamp).max(),
-            items: turn
+        .map(|(turn_index, turn)| {
+            let mut items = turn
                 .items
                 .iter()
                 .enumerate()
@@ -80,7 +67,45 @@ pub fn convert_preview_timeline(
                     preview.sensitive = preview.blocks.iter().any(|block| block.sensitive);
                     preview
                 })
-                .collect(),
+                .collect::<Vec<_>>();
+            if let Some(error) = turn.error.as_ref().filter(|error| !error.is_null()) {
+                items.push(PreviewItem {
+                    id: format!("{}-turn-error", turn.id),
+                    kind: PreviewItemKind::Error,
+                    title: "轮次错误".into(),
+                    status: turn.status.clone(),
+                    timestamp: turn.completed_at.or(turn.started_at),
+                    sensitive: false,
+                    blocks: vec![block(
+                        PreviewBlockKind::Error,
+                        "错误详情",
+                        value_text(error),
+                        false,
+                    )],
+                });
+            }
+            PreviewTurn {
+                id: turn.id.clone(),
+                index: turn_index,
+                status: turn
+                    .status
+                    .clone()
+                    .filter(|status| !status.is_empty())
+                    .unwrap_or_else(|| {
+                        if turn.completed {
+                            "completed".into()
+                        } else {
+                            "incomplete".into()
+                        }
+                    }),
+                started_at: turn
+                    .started_at
+                    .or_else(|| turn.items.iter().filter_map(|item| item.timestamp).min()),
+                completed_at: turn
+                    .completed_at
+                    .or_else(|| turn.items.iter().filter_map(|item| item.timestamp).max()),
+                items,
+            }
         })
         .collect();
 
@@ -125,12 +150,7 @@ pub fn convert_preview_timeline(
     Ok(PreviewTimelineV1 {
         schema_version: 1,
         source_thread_id: thread.thread_id.clone(),
-        cutoff_turn_id: cutoff_turn_id.map(str::to_owned).or_else(|| {
-            included_turn_count
-                .checked_sub(1)
-                .and_then(|index| thread.turns.get(index))
-                .map(|turn| turn.id.clone())
-        }),
+        cutoff_turn_id: cutoff_turn_id.map(str::to_owned),
         turns,
         notices,
     })
@@ -245,6 +265,12 @@ fn normalize_item(
                 .and_then(Value::as_i64)
                 .map(|millis| format!(" · {millis} ms"))
                 .unwrap_or_default();
+            let exit_code = item
+                .raw
+                .get("exitCode")
+                .and_then(Value::as_i64)
+                .map(|code| format!(" · exit {code}"))
+                .unwrap_or_default();
             let output = item
                 .raw
                 .get("aggregatedOutput")
@@ -254,7 +280,7 @@ fn normalize_item(
                 .to_owned();
             PreviewItem {
                 kind: PreviewItemKind::Command,
-                title: format!("命令执行 · {status}{duration}"),
+                title: format!("命令执行 · {status}{exit_code}{duration}"),
                 status: Some(status.into()),
                 blocks: vec![
                     block(PreviewBlockKind::Code, "命令", command, true),
@@ -410,12 +436,7 @@ fn normalize_item(
         "imageGeneration" => PreviewItem {
             kind: PreviewItemKind::Image,
             title: "生成的图片".into(),
-            blocks: vec![block(
-                PreviewBlockKind::Image,
-                "图片引用",
-                image_reference(&item.raw),
-                true,
-            )],
+            blocks: generated_image_blocks(&item.raw),
             ..base()
         },
         "error" => PreviewItem {
@@ -510,8 +531,51 @@ fn image_reference(value: &Value) -> String {
     ["path", "url", "fileId"]
         .into_iter()
         .find_map(|field| value.get(field).and_then(Value::as_str))
+        .filter(|reference| !reference.trim_start().starts_with("data:"))
         .map(str::to_owned)
-        .unwrap_or_else(|| pretty_json(value))
+        .unwrap_or_else(|| "预览不展开内联图片数据；打开原生会话可查看。".into())
+}
+
+fn generated_image_blocks(value: &Value) -> Vec<PreviewBlock> {
+    let mut blocks = Vec::new();
+    if let Some(reference) = ["path", "url", "fileId"]
+        .into_iter()
+        .find_map(|field| value.get(field).and_then(Value::as_str))
+        .filter(|reference| !reference.trim_start().starts_with("data:"))
+    {
+        blocks.push(block(
+            PreviewBlockKind::Image,
+            "图片引用",
+            reference.to_owned(),
+            true,
+        ));
+    } else {
+        blocks.push(block(
+            PreviewBlockKind::Text,
+            "图片内容",
+            "预览不展开内联图片数据；打开原生会话可查看。".into(),
+            false,
+        ));
+    }
+    if let Some(inputs) = value.get("inputImages").and_then(Value::as_array) {
+        let references = inputs
+            .iter()
+            .map(image_reference)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !references.is_empty() {
+            blocks.push(block(PreviewBlockKind::Text, "输入图片", references, false));
+        }
+    }
+    if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+        blocks.push(block(
+            PreviewBlockKind::Error,
+            "失败原因",
+            value_text(error),
+            false,
+        ));
+    }
+    blocks
 }
 
 fn add_notice(notices: &mut Vec<PreviewNotice>, code: &str, count: usize, message: &str) {
