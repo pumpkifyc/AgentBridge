@@ -170,3 +170,40 @@ impl ShareMetadata {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::snapshot::schema::{MessageRole, SnapshotMessage, SnapshotMetadata, SnapshotV1};
+
+    #[test]
+    fn share_metadata_never_contains_preview_timeline() {
+        let snapshot = SnapshotV1 {
+            schema_version: 1,
+            metadata: SnapshotMetadata {
+                source_thread_id: "thread-1".into(),
+                title: "测试会话".into(),
+                created_at: 1,
+                updated_at: 2,
+                cutoff_turn_id: None,
+                project_name: None,
+                repository_id: None,
+                source_working_directory: None,
+            },
+            messages: vec![SnapshotMessage {
+                role: MessageRole::User,
+                text: "仅作为摘要".into(),
+                turn_index: 0,
+                timestamp: Some(1),
+                historical_tool_summary: None,
+            }],
+            warnings: vec!["预览只影响显示".into()],
+        };
+
+        let serialized =
+            serde_json::to_string(&ShareMetadata::from_snapshot("share-1", &snapshot)).unwrap();
+        assert!(!serialized.contains("timeline"));
+        assert!(!serialized.contains("blocks"));
+        assert!(!serialized.contains("仅作为摘要"));
+    }
+}

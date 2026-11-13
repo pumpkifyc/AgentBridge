@@ -17,7 +17,7 @@ pub fn run() {
             commands::list_local_addresses,
             commands::list_threads,
             commands::list_turns,
-            commands::preview_snapshot,
+            commands::generate_preview,
             commands::cancel_preview,
             commands::start_share,
             commands::share_status,

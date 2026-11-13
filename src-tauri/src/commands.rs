@@ -1,10 +1,15 @@
 use crate::{
-    codex::{client::CodexClient, error::CodexError, models::Page},
+    codex::{
+        client::CodexClient,
+        error::CodexError,
+        models::{Page, RecordedThread},
+    },
     db::ImportDatabase,
     imports::{ImportError, ImportRecord, ImportService},
     native::{self, NativeBundleError},
     pairing::{InvitationManager, InvitationState},
-    snapshot::{schema::SnapshotV1, validate::validate_snapshot},
+    preview::{convert::convert_preview_timeline, schema::PreviewTimelineV1},
+    snapshot::{convert::convert_codex_items, schema::SnapshotV1, validate::validate_snapshot},
     transfer::TransferServer,
 };
 use serde::{Deserialize, Serialize};
@@ -106,7 +111,15 @@ impl Default for AppState {
 struct PreparedPreview {
     thread_id: String,
     snapshot: SnapshotV1,
+    timeline: PreviewTimelineV1,
     native_bundle: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedPreview {
+    pub snapshot: SnapshotV1,
+    pub timeline: PreviewTimelineV1,
 }
 
 #[derive(Default)]
@@ -119,6 +132,7 @@ impl PreviewRegistry {
         &self,
         request: &PreviewSnapshotRequest,
         snapshot: SnapshotV1,
+        timeline: PreviewTimelineV1,
         native_bundle: Vec<u8>,
     ) -> Result<(), CommandError> {
         request.validate()?;
@@ -134,6 +148,7 @@ impl PreviewRegistry {
             PreparedPreview {
                 thread_id: request.thread_id.clone(),
                 snapshot,
+                timeline,
                 native_bundle,
             },
         );
@@ -160,6 +175,21 @@ impl PreviewRegistry {
             ));
         }
         Ok((preview.snapshot, preview.native_bundle))
+    }
+
+    fn display_for_preview(&self, preview_id: &str) -> Result<GeneratedPreview, CommandError> {
+        validate_preview_id(preview_id)?;
+        let preview = self
+            .entries
+            .lock()
+            .expect("预览锁已中毒")
+            .get(preview_id)
+            .cloned()
+            .ok_or_else(|| CommandError::new("invalidPreview", "分享预览已失效，请重新生成"))?;
+        Ok(GeneratedPreview {
+            snapshot: preview.snapshot,
+            timeline: preview.timeline,
+        })
     }
 
     fn cancel(&self, preview_id: &str) {
@@ -214,7 +244,11 @@ impl PreviewSnapshotRequest {
 #[cfg(test)]
 mod preview_registry_tests {
     use super::*;
+    use crate::codex::models::{RecordedItem, RecordedThread, ThreadData, ThreadTurn};
+    use crate::preview::schema::{PreviewNoticeScope, PreviewTimelineV1, PreviewTurn};
     use crate::snapshot::schema::SnapshotMetadata;
+    use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn request(thread_id: &str, preview_id: &str) -> PreviewSnapshotRequest {
         PreviewSnapshotRequest {
@@ -242,12 +276,125 @@ mod preview_registry_tests {
         }
     }
 
+    fn timeline(thread_id: &str) -> PreviewTimelineV1 {
+        PreviewTimelineV1 {
+            schema_version: 1,
+            source_thread_id: thread_id.into(),
+            cutoff_turn_id: None,
+            turns: vec![PreviewTurn {
+                id: "turn-1".into(),
+                index: 0,
+                status: "completed".into(),
+                started_at: Some(1),
+                completed_at: Some(2),
+                items: Vec::new(),
+            }],
+            notices: vec![crate::preview::schema::PreviewNotice {
+                code: "unknown_items".into(),
+                count: 1,
+                message: "只影响预览，原生分享包仍完整保留".into(),
+                scope: PreviewNoticeScope::DisplayOnly,
+            }],
+        }
+    }
+
+    fn recorded_thread(thread_id: &str, rollout_path: &std::path::Path) -> RecordedThread {
+        RecordedThread {
+            data: ThreadData {
+                thread_id: thread_id.into(),
+                title: "原生包失败测试".into(),
+                created_at: 1,
+                updated_at: 2,
+                project_name: None,
+                repository_id: None,
+                working_directory: Some("/tmp/project".into()),
+                turns: vec![ThreadTurn {
+                    id: "turn-1".into(),
+                    completed: true,
+                    truncated: false,
+                    items: vec![RecordedItem {
+                        id: Some("agent-1".into()),
+                        kind: "agentMessage".into(),
+                        timestamp: Some(1),
+                        raw: json!({
+                            "type": "agentMessage",
+                            "id": "agent-1",
+                            "text": "测试"
+                        }),
+                    }],
+                }],
+            },
+            rollout_path: Some(rollout_path.to_string_lossy().into_owned()),
+        }
+    }
+
+    #[test]
+    fn registry_keeps_timeline_for_local_display_but_share_returns_only_snapshot_and_bundle() {
+        let registry = PreviewRegistry::default();
+        let preview_request = request("thread-1", "preview-1");
+        registry
+            .insert(
+                &preview_request,
+                snapshot("thread-1"),
+                timeline("thread-1"),
+                vec![1, 2],
+            )
+            .expect("预览应保存成功");
+
+        assert_eq!(
+            registry
+                .display_for_preview("preview-1")
+                .expect("本机预览应可读取")
+                .timeline
+                .source_thread_id,
+            "thread-1"
+        );
+        assert_eq!(
+            registry
+                .snapshot_for_share("thread-1", "preview-1")
+                .expect("分享数据应可读取")
+                .1,
+            vec![1, 2]
+        );
+    }
+
+    #[test]
+    fn failed_native_bundle_does_not_leave_shareable_preview() {
+        let registry = PreviewRegistry::default();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let codex_home = std::env::temp_dir().join(format!(
+            "agentbridge-preview-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&codex_home).unwrap();
+        let missing_rollout = codex_home.join("sessions/missing.jsonl");
+        let recorded = recorded_thread("thread-1", &missing_rollout);
+
+        let error = prepare_preview_data("thread-1", None, recorded, &codex_home)
+            .expect_err("不存在的 rollout 必须阻止生成分享");
+        assert_eq!(error.code, "invalidNativeBundle");
+        let share_error = registry
+            .snapshot_for_share("thread-1", "preview-failed")
+            .expect_err("失败预览不能进入分享注册表");
+        assert_eq!(share_error.code, "invalidPreview");
+
+        std::fs::remove_dir_all(codex_home).unwrap();
+    }
+
     #[test]
     fn preview_token_is_bound_to_its_source_thread() {
         let registry = PreviewRegistry::default();
         let preview_request = request("thread-1", "preview-1");
         registry
-            .insert(&preview_request, snapshot("thread-1"), vec![1, 2, 3])
+            .insert(
+                &preview_request,
+                snapshot("thread-1"),
+                timeline("thread-1"),
+                vec![1, 2, 3],
+            )
             .expect("预览应保存成功");
 
         let error = registry
@@ -272,6 +419,7 @@ mod preview_registry_tests {
             .insert(
                 &request("thread-1", "preview-1"),
                 snapshot("thread-1"),
+                timeline("thread-1"),
                 vec![1, 2, 3],
             )
             .expect("预览应保存成功");
@@ -291,6 +439,7 @@ mod preview_registry_tests {
             .insert(
                 &request("thread-1", "preview-1"),
                 snapshot("thread-1"),
+                timeline("thread-1"),
                 vec![1, 2, 3],
             )
             .expect("首个预览应保存成功");
@@ -299,6 +448,7 @@ mod preview_registry_tests {
             .insert(
                 &request("thread-2", "preview-1"),
                 snapshot("thread-2"),
+                timeline("thread-2"),
                 vec![4, 5, 6],
             )
             .expect_err("重复预览标识必须被拒绝");
@@ -509,43 +659,68 @@ pub async fn list_turns(
     .await
 }
 
-#[tauri::command]
-pub async fn preview_snapshot(
-    state: State<'_, AppState>,
-    request: PreviewSnapshotRequest,
-) -> Result<SnapshotV1, CommandError> {
-    request.validate()?;
-    let read_thread_id = request.thread_id.clone();
-    let cutoff_turn_id = request.cutoff_turn_id.clone();
-    let (snapshot, rollout_path) = run_codex_command(&state, move |client| {
-        let snapshot = client
-            .read_snapshot(&read_thread_id, cutoff_turn_id.as_deref())
-            .map_err(CommandError::from)?;
-        let rollout_path = client
-            .thread_rollout_path(&read_thread_id)
-            .map_err(CommandError::from)?;
-        Ok((snapshot, rollout_path))
-    })
-    .await?;
+fn prepare_preview_data(
+    thread_id: &str,
+    cutoff_turn_id: Option<&str>,
+    recorded: RecordedThread,
+    codex_home: &std::path::Path,
+) -> Result<(SnapshotV1, PreviewTimelineV1, Vec<u8>), CommandError> {
+    if recorded.data.thread_id != thread_id {
+        return Err(CommandError::new(
+            "invalidSnapshot",
+            "读取到的会话与分享请求不匹配，请重新生成预览",
+        ));
+    }
+    let snapshot = convert_codex_items(recorded.data.clone(), cutoff_turn_id.map(str::to_owned))
+        .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
+    let timeline = convert_preview_timeline(&recorded.data, cutoff_turn_id)
+        .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
+    if snapshot.metadata.cutoff_turn_id != timeline.cutoff_turn_id {
+        return Err(CommandError::new(
+            "invalidSnapshot",
+            "预览截止轮次不一致，请重新生成",
+        ));
+    }
     let bytes = serde_json::to_vec(&snapshot)
         .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
     let validated = validate_snapshot(&bytes)
         .map_err(|error| CommandError::new("invalidSnapshot", error.to_string()))?;
-    let codex_home = native::codex_home()?;
-    let snapshot_for_bundle = validated.clone();
-    let native_bundle = tokio::task::spawn_blocking(move || {
-        native::build_bundle(
-            &codex_home,
-            std::path::Path::new(&rollout_path),
-            &snapshot_for_bundle,
+    let rollout_path = recorded.rollout_path.ok_or_else(|| {
+        CommandError::new(
+            "invalidNativeBundle",
+            "Codex 未返回会话 rollout 文件路径，当前版本可能不支持原生分享",
         )
+    })?;
+    let native_bundle =
+        native::build_bundle(codex_home, std::path::Path::new(&rollout_path), &validated)?;
+    Ok((validated, timeline, native_bundle))
+}
+
+#[tauri::command]
+pub async fn generate_preview(
+    state: State<'_, AppState>,
+    request: PreviewSnapshotRequest,
+) -> Result<GeneratedPreview, CommandError> {
+    request.validate()?;
+    let read_thread_id = request.thread_id.clone();
+    let recorded = run_codex_command(&state, move |client| {
+        client
+            .read_thread_data(&read_thread_id)
+            .map_err(CommandError::from)
+    })
+    .await?;
+    let codex_home = native::codex_home()?;
+    let thread_id = request.thread_id.clone();
+    let cutoff = request.cutoff_turn_id.clone();
+    let (snapshot, timeline, native_bundle) = tokio::task::spawn_blocking(move || {
+        prepare_preview_data(&thread_id, cutoff.as_deref(), recorded, &codex_home)
     })
     .await
     .map_err(|error| CommandError::new("invalidNativeBundle", error.to_string()))??;
     state
         .previews
-        .insert(&request, validated.clone(), native_bundle)?;
-    Ok(validated)
+        .insert(&request, snapshot, timeline, native_bundle)?;
+    state.previews.display_for_preview(&request.preview_id)
 }
 
 #[tauri::command]
