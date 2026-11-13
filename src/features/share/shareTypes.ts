@@ -54,6 +54,69 @@ export interface SnapshotV1 {
   warnings: string[];
 }
 
+export type PreviewItemKind =
+  | "user_message"
+  | "assistant_message"
+  | "plan"
+  | "reasoning"
+  | "command"
+  | "file_change"
+  | "tool_call"
+  | "web_search"
+  | "image"
+  | "unknown"
+  | "error";
+
+export type PreviewBlockKind =
+  | "text"
+  | "code"
+  | "diff"
+  | "json"
+  | "image"
+  | "error";
+
+export interface PreviewBlock {
+  kind: PreviewBlockKind;
+  label: string;
+  content: string;
+  sensitive: boolean;
+  defaultExpanded: boolean;
+}
+
+export interface PreviewItem {
+  id: string;
+  kind: PreviewItemKind;
+  title: string;
+  status: string | null;
+  timestamp: number | null;
+  sensitive: boolean;
+  blocks: PreviewBlock[];
+}
+
+export interface PreviewTurn {
+  id: string;
+  index: number;
+  status: string;
+  startedAt: number | null;
+  completedAt: number | null;
+  items: PreviewItem[];
+}
+
+export interface PreviewNotice {
+  code: string;
+  count: number;
+  message: string;
+  scope: "display_only";
+}
+
+export interface PreviewTimelineV1 {
+  schemaVersion: number;
+  sourceThreadId: string;
+  cutoffTurnId: string | null;
+  turns: PreviewTurn[];
+  notices: PreviewNotice[];
+}
+
 export type SharePageState =
   | { kind: "loading" }
   | { kind: "available"; status: CodexStatus; threads: ThreadSummary[]; turns: TurnSummary[] }

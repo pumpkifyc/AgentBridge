@@ -1,80 +1,74 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import type { SnapshotV1 } from "./shareTypes";
+import { PreviewTurn } from "./PreviewTurn";
+import type { PreviewTimelineV1, SnapshotV1 } from "./shareTypes";
 
 interface Props {
+  timeline: PreviewTimelineV1 | null;
   snapshot: SnapshotV1 | null;
   loading: boolean;
   error: string | null;
 }
 
-const INITIAL_MESSAGE_COUNT = 20;
-const MESSAGE_PAGE_SIZE = 50;
+const INITIAL_TURN_COUNT = 1;
+const TURN_PAGE_SIZE = 3;
 
-export function ConversationPreview({ snapshot, loading, error }: Props) {
-  const [visibleMessageCount, setVisibleMessageCount] = useState(INITIAL_MESSAGE_COUNT);
-  const messageListRef = useRef<HTMLOListElement>(null);
+export function ConversationPreview({ timeline, snapshot, loading, error }: Props) {
+  const [visibleTurnCount, setVisibleTurnCount] = useState(INITIAL_TURN_COUNT);
+  const timelineRef = useRef<HTMLOListElement>(null);
   const distanceFromBottomRef = useRef<number | null>(null);
-  const latestTurnIndex = snapshot && snapshot.messages.length > 0
-    ? snapshot.messages[snapshot.messages.length - 1].turnIndex
-    : null;
-  const latestTurnStartIndex = latestTurnIndex === null
-    ? -1
-    : snapshot?.messages.findIndex((message) => message.turnIndex === latestTurnIndex) ?? -1;
 
   useLayoutEffect(() => {
-    const messageList = messageListRef.current;
-    if (!snapshot || !messageList) {
+    const list = timelineRef.current;
+    if (!timeline || !list) {
       return;
     }
-
     if (distanceFromBottomRef.current === null) {
-      const latestTurnStart = messageList.querySelector<HTMLElement>('[data-latest-turn-start="true"]');
-      if (latestTurnStart) {
-        const listTop = messageList.getBoundingClientRect().top;
-        const messageTop = latestTurnStart.getBoundingClientRect().top;
-        messageList.scrollTop += messageTop - listTop;
-      } else {
-        messageList.scrollTop = messageList.scrollHeight;
+      const latestTurn = list.querySelector<HTMLElement>('[data-latest-turn-start="true"]');
+      if (latestTurn) {
+        list.scrollTop += latestTurn.getBoundingClientRect().top - list.getBoundingClientRect().top;
       }
       return;
     }
-
-    messageList.scrollTop = Math.max(0, messageList.scrollHeight - distanceFromBottomRef.current);
+    list.scrollTop = Math.max(0, list.scrollHeight - distanceFromBottomRef.current);
     distanceFromBottomRef.current = null;
-  }, [snapshot, visibleMessageCount]);
+  }, [timeline, visibleTurnCount]);
 
   if (loading) {
-    return <p className="notice">正在读取会话历史…</p>;
+    return <p className="notice">正在读取完整会话历史…</p>;
   }
   if (error) {
     return <p className="notice error" role="alert">{error}</p>;
   }
-  if (!snapshot) {
-    return <p className="notice">选择左侧会话后可预览将分享的内容。</p>;
+  if (!timeline || !snapshot) {
+    return <p className="notice">选择左侧会话后可预览将分享的完整内容。</p>;
   }
 
-  const latestTurnMessageCount = latestTurnStartIndex >= 0
-    ? snapshot.messages.length - latestTurnStartIndex
-    : 0;
-  const renderedMessageCount = Math.max(visibleMessageCount, latestTurnMessageCount);
-  const visibleStartIndex = Math.max(snapshot.messages.length - renderedMessageCount, 0);
-  const visibleMessages = snapshot.messages.slice(visibleStartIndex);
-  const remainingMessageCount = visibleStartIndex;
-  const nextMessageCount = Math.min(MESSAGE_PAGE_SIZE, remainingMessageCount);
+  const visibleStart = Math.max(0, timeline.turns.length - visibleTurnCount);
+  const visibleTurns = timeline.turns.slice(visibleStart);
+  const remainingTurns = visibleStart;
+  const nextTurnCount = Math.min(TURN_PAGE_SIZE, remainingTurns);
+  const itemCount = timeline.turns.reduce((count, turn) => count + turn.items.length, 0);
 
-  function showEarlierMessages() {
-    const messageList = messageListRef.current;
-    if (messageList) {
-      distanceFromBottomRef.current = messageList.scrollHeight - messageList.scrollTop;
+  function showEarlierTurns() {
+    const list = timelineRef.current;
+    if (list) {
+      distanceFromBottomRef.current = list.scrollHeight - list.scrollTop;
     }
-    setVisibleMessageCount((count) => count + MESSAGE_PAGE_SIZE);
+    setVisibleTurnCount((count) => count + TURN_PAGE_SIZE);
   }
 
   return (
     <section className="panel conversation-preview" aria-labelledby="conversation-preview-title">
       <div className="panel-heading">
         <h2 id="conversation-preview-title">会话预览</h2>
-        <span>{snapshot.messages.length} 条消息 · 默认显示最新</span>
+        <span>{timeline.turns.length} 轮 · {itemCount} 个事件 · 默认显示最新</span>
+      </div>
+      <div className="fidelity-notice" role="note">
+        <strong>当前为完整分享预览</strong>
+        <p>
+          敏感内容和大型内容默认折叠；“展开原文”后可与 Codex 中的内容核对。
+          <code>.agbridge</code> 原生包始终保留原始会话，不受预览折叠影响。
+        </p>
       </div>
       <dl className="metadata-grid">
         <dt>源会话标题</dt>
@@ -82,38 +76,41 @@ export function ConversationPreview({ snapshot, loading, error }: Props) {
         <dt>项目 / 仓库</dt>
         <dd>{snapshot.metadata.projectName || snapshot.metadata.repositoryId || "未提供"}</dd>
         <dt>分享方工作目录</dt>
-        <dd>{snapshot.metadata.sourceWorkingDirectory || "未提供"} <small>（仅作说明，接收方需选择自己的项目目录）</small></dd>
+        <dd>
+          {snapshot.metadata.sourceWorkingDirectory || "未提供"}{" "}
+          <small>（仅作说明，接收方需选择自己的项目目录）</small>
+        </dd>
         <dt>截止轮次</dt>
-        <dd>{snapshot.metadata.cutoffTurnId || "最近一个已完成轮次"}</dd>
+        <dd>{timeline.cutoffTurnId || "最近一个已完成轮次"}</dd>
       </dl>
-      {snapshot.warnings.length > 0 && (
-        <div className="warnings" role="status">
-          <strong>预览说明</strong>
-          <ul>{snapshot.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+      {timeline.notices.length > 0 && (
+        <div className="preview-notices" role="status">
+          <strong>预览显示说明</strong>
+          <ul>
+            {timeline.notices.map((notice) => (
+              <li key={notice.code}>
+                {notice.message}（{notice.count.toLocaleString("zh-CN")} 项）
+              </li>
+            ))}
+          </ul>
         </div>
       )}
-      {remainingMessageCount > 0 && (
+      {remainingTurns > 0 && (
         <button
           type="button"
-          className="secondary-action message-load-earlier"
-          onClick={showEarlierMessages}
+          className="secondary-action turn-load-earlier"
+          onClick={showEarlierTurns}
         >
-          显示更早的 {nextMessageCount} 条（还有 {remainingMessageCount} 条）
+          显示更早的 {nextTurnCount} 轮（还有 {remainingTurns} 轮）
         </button>
       )}
-      <ol ref={messageListRef} className="message-list" aria-label="会话消息列表">
-        {visibleMessages.map((message, index) => (
-          <li
-            key={`${message.turnIndex}-${index}`}
-            className={`message ${message.role}`}
-            data-latest-turn-start={visibleStartIndex + index === latestTurnStartIndex ? "true" : undefined}
-          >
-            <span className="message-role">{message.role === "user" ? "用户" : "助手"} · 第 {message.turnIndex + 1} 轮</span>
-            <p>{message.text}</p>
-            {message.historicalToolSummary && (
-              <p className="tool-summary">历史工具结果：{message.historicalToolSummary}</p>
-            )}
-          </li>
+      <ol ref={timelineRef} className="preview-timeline" aria-label="完整会话时间线">
+        {visibleTurns.map((turn, index) => (
+          <PreviewTurn
+            key={turn.id}
+            turn={turn}
+            latest={visibleStart + index === timeline.turns.length - 1}
+          />
         ))}
       </ol>
     </section>
