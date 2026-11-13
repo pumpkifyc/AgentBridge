@@ -1,14 +1,12 @@
 use super::{
     error::CodexError,
     executable::{configure_codex_command, resolve_codex_executable},
-    models::{Page, ThreadSummary, TurnSummary},
+    models::{
+        Page, RecordedItem, RecordedThread, ThreadData, ThreadSummary, ThreadTurn, TurnSummary,
+    },
     protocol::{RpcRequest, RpcResponse},
 };
-use crate::snapshot::{
-    convert::{CodexItem, ThreadData, ThreadTurn, convert_codex_items},
-    schema::SnapshotV1,
-    validate::SnapshotError,
-};
+use crate::snapshot::{convert::convert_codex_items, schema::SnapshotV1};
 use serde_json::{Value, json};
 use std::{
     io::{BufRead, BufReader, BufWriter, Write},
@@ -293,6 +291,14 @@ impl CodexClient {
         thread_id: &str,
         cutoff_turn_id: Option<&str>,
     ) -> Result<SnapshotV1, CodexError> {
+        let recorded = self.read_thread_data(thread_id)?;
+        Ok(convert_codex_items(
+            recorded.data,
+            cutoff_turn_id.map(str::to_owned),
+        )?)
+    }
+
+    pub fn read_thread_data(&mut self, thread_id: &str) -> Result<RecordedThread, CodexError> {
         let thread_response = self.request(
             "thread/read",
             json!({"threadId": thread_id, "includeTurns": false}),
@@ -303,13 +309,8 @@ impl CodexClient {
             .thread
             .ok_or_else(|| CodexError::ThreadNotFound(thread_id.into()))?;
 
-        let mut turns = self.list_turns(thread_id)?;
-        if let Some(cutoff) = cutoff_turn_id
-            && !turns.iter().any(|turn| turn.id == cutoff && turn.completed)
-        {
-            return Err(CodexError::Snapshot(SnapshotError::InvalidCutoff));
-        }
-        let mut items_by_turn: std::collections::HashMap<String, Vec<CodexItem>> =
+        let turns = self.list_turns(thread_id)?;
+        let mut items_by_turn: std::collections::HashMap<String, Vec<RecordedItem>> =
             std::collections::HashMap::new();
         let mut item_cursor: Option<String> = None;
         for page_number in 0..MAX_ITEM_PAGES {
@@ -327,14 +328,38 @@ impl CodexClient {
             for entry in page.data {
                 let timestamp = entry
                     .started_at_ms
+                    .or_else(|| entry.item.get("startedAtMs").and_then(Value::as_i64))
                     .map(|millis| millis / 1_000)
                     .or_else(|| entry.completed_at_ms.map(|millis| millis / 1_000))
+                    .or_else(|| {
+                        entry
+                            .item
+                            .get("completedAtMs")
+                            .and_then(Value::as_i64)
+                            .map(|millis| millis / 1_000)
+                    })
                     .or(entry.started_at)
                     .or(entry.completed_at);
+                let kind = entry
+                    .item
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_owned();
+                let id = entry
+                    .item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 items_by_turn
                     .entry(entry.turn_id)
                     .or_default()
-                    .extend(convert_item(entry.item, timestamp));
+                    .push(RecordedItem {
+                        id,
+                        kind,
+                        timestamp,
+                        raw: entry.item,
+                    });
             }
             item_cursor = page.next_cursor;
             if item_cursor.is_none() {
@@ -344,21 +369,20 @@ impl CodexClient {
                 return Err(CodexError::Protocol("会话条目分页过多".into()));
             }
         }
-        for turn in &mut turns {
-            turn.items = items_by_turn.remove(&turn.id).unwrap_or_default();
-        }
-
         let turns = turns
             .into_iter()
-            .map(|turn| ThreadTurn {
-                id: turn.id,
-                completed: turn.completed,
-                truncated: false,
-                items: turn.items,
+            .map(|turn| {
+                let items = items_by_turn.remove(&turn.id).unwrap_or_default();
+                ThreadTurn {
+                    id: turn.id,
+                    completed: turn.completed,
+                    truncated: false,
+                    items,
+                }
             })
             .collect();
-        Ok(convert_codex_items(
-            ThreadData {
+        Ok(RecordedThread {
+            data: ThreadData {
                 thread_id: thread.id,
                 title: thread.name.unwrap_or_else(|| thread.preview.clone()),
                 created_at: thread.created_at,
@@ -368,8 +392,8 @@ impl CodexClient {
                 working_directory: Some(thread.cwd),
                 turns,
             },
-            cutoff_turn_id.map(str::to_owned),
-        )?)
+            rollout_path: thread.path,
+        })
     }
 
     pub fn thread_rollout_path(&mut self, thread_id: &str) -> Result<String, CodexError> {
@@ -504,79 +528,6 @@ fn terminate_process_tree(child: &mut Child) {
     let _ = child.wait();
 }
 
-fn convert_item(item: ThreadItem, timestamp: Option<i64>) -> Vec<CodexItem> {
-    match item {
-        ThreadItem::UserMessage { content } => {
-            let mut text = Vec::new();
-            let mut unsupported = Vec::new();
-            for part in content {
-                match part.kind.as_str() {
-                    "text" => text.push(part.text.unwrap_or_default()),
-                    "image" | "localImage" => unsupported.push("图片附件".to_owned()),
-                    other => unsupported.push(other.to_owned()),
-                }
-            }
-            let mut converted = Vec::new();
-            if !text.is_empty() {
-                converted.push(CodexItem::UserText {
-                    text: text.join("\n"),
-                    timestamp,
-                });
-            }
-            converted.extend(
-                unsupported
-                    .into_iter()
-                    .map(|kind| CodexItem::Unsupported { kind }),
-            );
-            converted
-        }
-        ThreadItem::AgentMessage { text } => vec![CodexItem::AssistantText { text, timestamp }],
-        ThreadItem::Plan { text } => vec![CodexItem::AssistantText { text, timestamp }],
-        ThreadItem::CommandExecution { aggregated_output } => {
-            vec![aggregated_output.map_or_else(
-                || CodexItem::Unsupported {
-                    kind: "命令执行（无可读输出）".into(),
-                },
-                |text| CodexItem::ToolResult {
-                    name: "命令执行".into(),
-                    text,
-                    timestamp,
-                },
-            )]
-        }
-        ThreadItem::McpToolCall {
-            server,
-            tool,
-            result,
-        } => vec![
-            CodexItem::ToolCall {
-                name: format!("{server}/{tool}"),
-                arguments: String::new(),
-                timestamp,
-            },
-            result.map_or_else(
-                || CodexItem::Unsupported {
-                    kind: format!("{server}/{tool}（无可读取结果）"),
-                },
-                |value| CodexItem::ToolResult {
-                    name: format!("{server}/{tool}"),
-                    text: match value {
-                        serde_json::Value::String(text) => text,
-                        other => other.to_string(),
-                    },
-                    timestamp,
-                },
-            ),
-        ],
-        ThreadItem::FileChange => vec![CodexItem::Unsupported {
-            kind: "文件变更".into(),
-        }],
-        ThreadItem::Other => vec![CodexItem::Unsupported {
-            kind: "未知 Codex 历史条目".into(),
-        }],
-    }
-}
-
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ThreadListResponse {
@@ -682,7 +633,7 @@ struct ThreadItemsPage {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ThreadItemEntry {
-    item: ThreadItem,
+    item: Value,
     turn_id: String,
     #[serde(default)]
     started_at: Option<i64>,
@@ -692,40 +643,6 @@ struct ThreadItemEntry {
     started_at_ms: Option<i64>,
     #[serde(default)]
     completed_at_ms: Option<i64>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(tag = "type")]
-enum ThreadItem {
-    #[serde(rename = "userMessage")]
-    UserMessage { content: Vec<UserInput> },
-    #[serde(rename = "agentMessage")]
-    AgentMessage { text: String },
-    #[serde(rename = "plan")]
-    Plan { text: String },
-    #[serde(rename = "commandExecution")]
-    CommandExecution {
-        #[serde(rename = "aggregatedOutput")]
-        aggregated_output: Option<String>,
-    },
-    #[serde(rename = "mcpToolCall")]
-    McpToolCall {
-        server: String,
-        tool: String,
-        result: Option<serde_json::Value>,
-    },
-    #[serde(rename = "fileChange")]
-    FileChange,
-    #[serde(other)]
-    Other,
-}
-
-#[derive(serde::Deserialize)]
-struct UserInput {
-    #[serde(rename = "type")]
-    kind: String,
-    #[serde(default)]
-    text: Option<String>,
 }
 
 #[derive(serde::Deserialize)]

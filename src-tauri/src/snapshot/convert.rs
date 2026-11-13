@@ -2,30 +2,10 @@ use super::{
     schema::{MessageRole, SnapshotMessage, SnapshotMetadata, SnapshotV1},
     validate::SnapshotError,
 };
+use crate::codex::models::{RecordedItem, ThreadData};
 use regex::Regex;
 use serde::Deserialize;
 use std::sync::LazyLock;
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ThreadData {
-    pub thread_id: String,
-    pub title: String,
-    pub created_at: i64,
-    pub updated_at: i64,
-    pub project_name: Option<String>,
-    pub repository_id: Option<String>,
-    pub working_directory: Option<String>,
-    pub turns: Vec<ThreadTurn>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ThreadTurn {
-    pub id: String,
-    pub completed: bool,
-    #[serde(default)]
-    pub truncated: bool,
-    pub items: Vec<CodexItem>,
-}
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -106,77 +86,79 @@ pub fn convert_codex_items(
             warnings.add(format!("第 {} 轮历史内容已截断", turn_index + 1));
         }
         for item in &turn.items {
-            match item {
-                CodexItem::UserText { text, timestamp } => {
-                    let (text, changed) = redact(text);
-                    if changed {
-                        add_redaction_warning(&mut warnings);
-                    }
-                    messages.push(SnapshotMessage {
-                        role: MessageRole::User,
-                        text,
-                        turn_index,
-                        timestamp: *timestamp,
-                        historical_tool_summary: None,
-                    });
-                }
-                CodexItem::AssistantText { text, timestamp } => {
-                    let (text, changed) = redact(text);
-                    if changed {
-                        add_redaction_warning(&mut warnings);
-                    }
-                    messages.push(SnapshotMessage {
-                        role: MessageRole::Assistant,
-                        text,
-                        turn_index,
-                        timestamp: *timestamp,
-                        historical_tool_summary: None,
-                    });
-                }
-                CodexItem::ToolResult {
-                    name,
-                    text,
-                    timestamp,
-                } => {
-                    let (text, changed) = redact(text);
-                    if changed {
-                        add_redaction_warning(&mut warnings);
-                    }
-                    let summary = format!(
-                        "{}: {}",
-                        name.chars().take(120).collect::<String>(),
-                        text.chars().take(4000).collect::<String>()
-                    );
-                    if let Some(previous) =
-                        messages
-                            .iter_mut()
-                            .rev()
-                            .find(|message: &&mut SnapshotMessage| {
-                                message.role == MessageRole::Assistant
-                                    && message.turn_index == turn_index
-                            })
-                    {
-                        previous.historical_tool_summary =
-                            Some(match previous.historical_tool_summary.take() {
-                                Some(existing) => format!("{existing}\n{summary}"),
-                                None => summary,
-                            });
-                    } else {
+            for converted in convert_recorded_item(item) {
+                match converted {
+                    CodexItem::UserText { text, timestamp } => {
+                        let (text, changed) = redact(&text);
+                        if changed {
+                            add_redaction_warning(&mut warnings);
+                        }
                         messages.push(SnapshotMessage {
-                            role: MessageRole::Assistant,
-                            text: "历史工具结果".into(),
+                            role: MessageRole::User,
+                            text,
                             turn_index,
-                            timestamp: *timestamp,
-                            historical_tool_summary: Some(summary),
+                            timestamp,
+                            historical_tool_summary: None,
                         });
                     }
-                }
-                CodexItem::ToolCall { .. } => {}
-                CodexItem::Binary { mime_type } => {
-                    warnings.add(format!("已省略二进制附件（{mime_type}）"));
-                }
-                CodexItem::Unsupported { kind } => {
-                    warnings.add(format!("已省略不支持的 {kind} 内容"))
+                    CodexItem::AssistantText { text, timestamp } => {
+                        let (text, changed) = redact(&text);
+                        if changed {
+                            add_redaction_warning(&mut warnings);
+                        }
+                        messages.push(SnapshotMessage {
+                            role: MessageRole::Assistant,
+                            text,
+                            turn_index,
+                            timestamp,
+                            historical_tool_summary: None,
+                        });
+                    }
+                    CodexItem::ToolResult {
+                        name,
+                        text,
+                        timestamp,
+                    } => {
+                        let (text, changed) = redact(&text);
+                        if changed {
+                            add_redaction_warning(&mut warnings);
+                        }
+                        let summary = format!(
+                            "{}: {}",
+                            name.chars().take(120).collect::<String>(),
+                            text.chars().take(4000).collect::<String>()
+                        );
+                        if let Some(previous) =
+                            messages
+                                .iter_mut()
+                                .rev()
+                                .find(|message: &&mut SnapshotMessage| {
+                                    message.role == MessageRole::Assistant
+                                        && message.turn_index == turn_index
+                                })
+                        {
+                            previous.historical_tool_summary =
+                                Some(match previous.historical_tool_summary.take() {
+                                    Some(existing) => format!("{existing}\n{summary}"),
+                                    None => summary,
+                                });
+                        } else {
+                            messages.push(SnapshotMessage {
+                                role: MessageRole::Assistant,
+                                text: "历史工具结果".into(),
+                                turn_index,
+                                timestamp,
+                                historical_tool_summary: Some(summary),
+                            });
+                        }
+                    }
+                    CodexItem::ToolCall { .. } => {}
+                    CodexItem::Binary { mime_type } => {
+                        warnings.add(format!("已省略二进制附件（{mime_type}）"));
+                    }
+                    CodexItem::Unsupported { kind } => {
+                        warnings.add(format!("已省略不支持的 {kind} 内容"))
+                    }
                 }
             }
         }
@@ -214,6 +196,131 @@ pub fn convert_codex_items(
         messages,
         warnings: warnings.finish(),
     })
+}
+
+fn convert_recorded_item(item: &RecordedItem) -> Vec<CodexItem> {
+    let timestamp = item.timestamp;
+    match item.kind.as_str() {
+        "userMessage" => {
+            let mut text = Vec::new();
+            let mut unsupported = Vec::new();
+            for part in item
+                .raw
+                .get("content")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                match part.get("type").and_then(serde_json::Value::as_str) {
+                    Some("text") => {
+                        text.push(
+                            part.get("text")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or_default(),
+                        );
+                    }
+                    Some("image" | "localImage") => unsupported.push("图片附件".to_owned()),
+                    Some(kind) => unsupported.push(kind.to_owned()),
+                    None => unsupported.push("未知输入".to_owned()),
+                }
+            }
+            let mut converted = Vec::new();
+            if !text.is_empty() {
+                converted.push(CodexItem::UserText {
+                    text: text.join("\n"),
+                    timestamp,
+                });
+            }
+            converted.extend(
+                unsupported
+                    .into_iter()
+                    .map(|kind| CodexItem::Unsupported { kind }),
+            );
+            converted
+        }
+        "agentMessage" | "plan" => item
+            .raw
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .map(|text| {
+                vec![CodexItem::AssistantText {
+                    text: text.to_owned(),
+                    timestamp,
+                }]
+            })
+            .unwrap_or_else(|| {
+                vec![CodexItem::Unsupported {
+                    kind: if item.kind == "plan" {
+                        "计划"
+                    } else {
+                        "助手消息"
+                    }
+                    .into(),
+                }]
+            }),
+        "commandExecution" => vec![
+            item.raw
+                .get("aggregatedOutput")
+                .and_then(serde_json::Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map_or_else(
+                    || CodexItem::Unsupported {
+                        kind: "命令执行（无可读输出）".into(),
+                    },
+                    |text| CodexItem::ToolResult {
+                        name: "命令执行".into(),
+                        text: text.to_owned(),
+                        timestamp,
+                    },
+                ),
+        ],
+        "mcpToolCall" => {
+            let server = item
+                .raw
+                .get("server")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("MCP");
+            let tool = item
+                .raw
+                .get("tool")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("未知工具");
+            let name = format!("{server}/{tool}");
+            vec![
+                CodexItem::ToolCall {
+                    name: name.clone(),
+                    arguments: String::new(),
+                    timestamp,
+                },
+                item.raw
+                    .get("result")
+                    .filter(|value| !value.is_null())
+                    .map_or_else(
+                        || CodexItem::Unsupported {
+                            kind: format!("{name}（无可读取结果）"),
+                        },
+                        |value| match value {
+                            serde_json::Value::String(text) => CodexItem::ToolResult {
+                                name: name.clone(),
+                                text: text.clone(),
+                                timestamp,
+                            },
+                            other => CodexItem::ToolResult {
+                                name: name.clone(),
+                                text: other.to_string(),
+                                timestamp,
+                            },
+                        },
+                    ),
+            ]
+        }
+        "fileChange" => vec![CodexItem::Unsupported {
+            kind: "文件变更".into(),
+        }],
+        _ => vec![CodexItem::Unsupported {
+            kind: "未知 Codex 历史条目".into(),
+        }],
+    }
 }
 
 #[derive(Default)]

@@ -130,6 +130,44 @@ fn read_snapshot_pages_turns_and_items_without_replaying_tool_arguments() {
 }
 
 #[test]
+fn read_thread_data_preserves_all_item_types_raw_json_and_order() {
+    let (dir, mut client) = connect("full-fidelity", "full-fidelity");
+    let recorded = client
+        .read_thread_data("source-thread")
+        .expect("应读取完整原始会话条目");
+
+    let kinds = recorded.data.turns[0]
+        .items
+        .iter()
+        .map(|item| item.kind.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        [
+            "userMessage",
+            "reasoning",
+            "commandExecution",
+            "fileChange",
+            "mcpToolCall",
+            "dynamicToolCall",
+            "functionCallOutput",
+            "webSearch",
+            "imageView",
+            "futureItem",
+        ]
+    );
+    assert_eq!(recorded.data.turns[0].items[9].raw["payloadValue"], 42);
+    assert_eq!(recorded.data.turns[0].items[2].timestamp, Some(130));
+    assert_eq!(
+        recorded.data.turns[0].items[9].id.as_deref(),
+        Some("future-full")
+    );
+
+    drop(client);
+    remove_dir(&dir);
+}
+
+#[test]
 fn cutoff_selects_an_earlier_completed_turn() {
     let (dir, mut client) = connect("cutoff", "ok");
     let snapshot = client

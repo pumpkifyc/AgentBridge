@@ -1,8 +1,19 @@
 use super::super::snapshot::{
-    convert::{CodexItem, ThreadData, ThreadTurn, convert_codex_items},
+    convert::convert_codex_items,
     schema::{MessageRole, SnapshotMessage, SnapshotMetadata, SnapshotV1},
     validate::{SnapshotError, validate_snapshot},
 };
+use crate::codex::models::{RecordedItem, ThreadData, ThreadTurn};
+use serde_json::{Value, json};
+
+fn recorded(kind: &str, id: &str, timestamp: Option<i64>, raw: Value) -> RecordedItem {
+    RecordedItem {
+        id: Some(id.into()),
+        kind: kind.into(),
+        timestamp,
+        raw,
+    }
+}
 
 fn thread() -> ThreadData {
     ThreadData {
@@ -19,30 +30,55 @@ fn thread() -> ThreadData {
                 completed: true,
                 truncated: false,
                 items: vec![
-                    CodexItem::UserText {
-                        text: "Fix login".into(),
-                        timestamp: Some(110),
-                    },
-                    CodexItem::AssistantText {
-                        text: "I will inspect the flow.".into(),
-                        timestamp: Some(120),
-                    },
-                    CodexItem::ToolCall {
-                        name: "shell".into(),
-                        arguments: "rm -rf /".into(),
-                        timestamp: Some(130),
-                    },
-                    CodexItem::ToolResult {
-                        name: "shell".into(),
-                        text: "found file".into(),
-                        timestamp: Some(140),
-                    },
-                    CodexItem::Binary {
-                        mime_type: "image/png".into(),
-                    },
-                    CodexItem::Unsupported {
-                        kind: "image".into(),
-                    },
+                    recorded(
+                        "userMessage",
+                        "user-1",
+                        Some(110),
+                        json!({
+                            "type": "userMessage",
+                            "id": "user-1",
+                            "content": [{"type": "text", "text": "Fix login"}]
+                        }),
+                    ),
+                    recorded(
+                        "agentMessage",
+                        "agent-1",
+                        Some(120),
+                        json!({
+                            "type": "agentMessage",
+                            "id": "agent-1",
+                            "text": "I will inspect the flow."
+                        }),
+                    ),
+                    recorded(
+                        "mcpToolCall",
+                        "call-1",
+                        Some(130),
+                        json!({
+                            "type": "mcpToolCall",
+                            "id": "call-1",
+                            "server": "shell",
+                            "tool": "exec",
+                            "arguments": {"command": "rm -rf /"},
+                            "result": "found file"
+                        }),
+                    ),
+                    recorded(
+                        "futureItem",
+                        "future-1",
+                        Some(140),
+                        json!({"type": "futureItem", "id": "future-1"}),
+                    ),
+                    recorded(
+                        "userMessage",
+                        "images-1",
+                        Some(150),
+                        json!({
+                            "type": "userMessage",
+                            "id": "images-1",
+                            "content": [{"type": "localImage", "path": "/tmp/image.png"}]
+                        }),
+                    ),
                 ],
             },
             ThreadTurn {
@@ -50,24 +86,42 @@ fn thread() -> ThreadData {
                 completed: true,
                 truncated: false,
                 items: vec![
-                    CodexItem::UserText {
-                        text: "Add a test".into(),
-                        timestamp: Some(210),
-                    },
-                    CodexItem::AssistantText {
-                        text: "Added the regression test.".into(),
-                        timestamp: Some(220),
-                    },
+                    recorded(
+                        "userMessage",
+                        "user-2",
+                        Some(210),
+                        json!({
+                            "type": "userMessage",
+                            "id": "user-2",
+                            "content": [{"type": "text", "text": "Add a test"}]
+                        }),
+                    ),
+                    recorded(
+                        "agentMessage",
+                        "agent-2",
+                        Some(220),
+                        json!({
+                            "type": "agentMessage",
+                            "id": "agent-2",
+                            "text": "Added the regression test."
+                        }),
+                    ),
                 ],
             },
             ThreadTurn {
                 id: "turn-3".into(),
                 completed: false,
                 truncated: false,
-                items: vec![CodexItem::AssistantText {
-                    text: "Still working".into(),
-                    timestamp: Some(310),
-                }],
+                items: vec![recorded(
+                    "agentMessage",
+                    "agent-3",
+                    Some(310),
+                    json!({
+                        "type": "agentMessage",
+                        "id": "agent-3",
+                        "text": "Still working"
+                    }),
+                )],
             },
         ],
     }
@@ -102,7 +156,7 @@ fn valid_snapshot() -> SnapshotV1 {
                 historical_tool_summary: Some("shell: found file".into()),
             },
         ],
-        warnings: vec!["已省略不支持的 image 内容".into()],
+        warnings: vec!["已省略不支持的 未知 Codex 历史条目 内容".into()],
     }
 }
 
@@ -121,11 +175,11 @@ fn converts_completed_turns_in_order_and_keeps_source_path_as_metadata() {
         snapshot
             .warnings
             .iter()
-            .any(|warning| warning.contains("image"))
+            .any(|warning| warning.contains("未知 Codex"))
     );
     let serialized = serde_json::to_string(&snapshot).unwrap();
     assert!(!serialized.contains("rm -rf /"));
-    assert!(serialized.contains("shell: found file"));
+    assert!(serialized.contains("shell/exec: found file"));
 }
 
 #[test]
@@ -149,10 +203,16 @@ fn an_uncut_snapshot_excludes_all_turns_when_none_are_complete() {
         id: "pending".into(),
         completed: false,
         truncated: false,
-        items: vec![CodexItem::AssistantText {
-            text: "Still working".into(),
-            timestamp: Some(310),
-        }],
+        items: vec![recorded(
+            "agentMessage",
+            "agent-pending",
+            Some(310),
+            json!({
+                "type": "agentMessage",
+                "id": "agent-pending",
+                "text": "Still working"
+            }),
+        )],
     }];
 
     let snapshot = convert_codex_items(data, None).unwrap();
@@ -165,17 +225,31 @@ fn redacts_common_credentials_from_messages_and_tool_summaries() {
     let mut data = thread();
     data.turns.truncate(1);
     data.turns[0].items = vec![
-        CodexItem::UserText {
-            text:
-                "key=sk-proj-12345678901234567890 token=ghp_12345678901234567890 password=hunter2"
-                    .into(),
-            timestamp: Some(110),
-        },
-        CodexItem::ToolResult {
-            name: "shell".into(),
-            text: "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.secret.signature".into(),
-            timestamp: Some(120),
-        },
+        recorded(
+            "userMessage",
+            "secret-user",
+            Some(110),
+            json!({
+                "type": "userMessage",
+                "id": "secret-user",
+                "content": [{
+                    "type": "text",
+                    "text": "key=sk-proj-12345678901234567890 token=ghp_12345678901234567890 password=hunter2"
+                }]
+            }),
+        ),
+        recorded(
+            "mcpToolCall",
+            "secret-tool",
+            Some(120),
+            json!({
+                "type": "mcpToolCall",
+                "id": "secret-tool",
+                "server": "shell",
+                "tool": "exec",
+                "result": "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.secret.signature"
+            }),
+        ),
     ];
 
     let snapshot = convert_codex_items(data, None).unwrap();
@@ -195,23 +269,28 @@ fn redacts_common_credentials_from_messages_and_tool_summaries() {
 fn aggregates_repeated_unsupported_item_warnings() {
     let mut data = thread();
     data.turns.truncate(1);
-    data.turns[0].items = vec![
-        CodexItem::Unsupported {
-            kind: "未知 Codex 历史条目".into(),
-        },
-        CodexItem::Unsupported {
-            kind: "未知 Codex 历史条目".into(),
-        },
-        CodexItem::Unsupported {
-            kind: "未知 Codex 历史条目".into(),
-        },
-        CodexItem::Binary {
-            mime_type: "image/png".into(),
-        },
-        CodexItem::Binary {
-            mime_type: "image/png".into(),
-        },
-    ];
+    data.turns[0].items = (0..3)
+        .map(|index| {
+            recorded(
+                "futureItem",
+                &format!("future-{index}"),
+                Some(100 + index),
+                json!({"type": "futureItem", "id": format!("future-{index}")}),
+            )
+        })
+        .chain((0..2).map(|index| {
+            recorded(
+                "userMessage",
+                &format!("image-{index}"),
+                Some(200 + index),
+                json!({
+                    "type": "userMessage",
+                    "id": format!("image-{index}"),
+                    "content": [{"type": "localImage", "path": format!("/tmp/{index}.png")}]
+                }),
+            )
+        }))
+        .collect();
 
     let snapshot = convert_codex_items(data, None).unwrap();
 
@@ -219,7 +298,7 @@ fn aggregates_repeated_unsupported_item_warnings() {
         snapshot.warnings,
         vec![
             "已省略不支持的 未知 Codex 历史条目 内容（共 3 项）",
-            "已省略二进制附件（image/png）（共 2 项）",
+            "已省略不支持的 图片附件 内容（共 2 项）",
         ]
     );
 }

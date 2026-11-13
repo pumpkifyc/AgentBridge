@@ -200,6 +200,85 @@ fn thread_items_page(turn_id: &str, cursor: Option<&str>) -> Value {
     json!({"data": [], "nextCursor": null})
 }
 
+fn full_fidelity_items_page() -> Value {
+    json!({
+        "data": [
+            item_entry("turn-1", json!({
+                "type": "userMessage",
+                "id": "user-full",
+                "content": [{"type": "text", "text": "完整预览"}]
+            }), 110),
+            item_entry("turn-1", json!({
+                "type": "reasoning",
+                "id": "reasoning-full",
+                "summary": ["检查历史结构"],
+                "content": []
+            }), 120),
+            item_entry("turn-1", json!({
+                "type": "commandExecution",
+                "id": "command-full",
+                "command": "pwd",
+                "cwd": "/tmp/project",
+                "status": "completed",
+                "aggregatedOutput": null,
+                "exitCode": 0,
+                "durationMs": 12
+            }), 130),
+            item_entry("turn-1", json!({
+                "type": "fileChange",
+                "id": "file-full",
+                "status": "completed",
+                "changes": [{"path": "src/main.ts", "kind": "update", "diff": "+new"}]
+            }), 140),
+            item_entry("turn-1", json!({
+                "type": "mcpToolCall",
+                "id": "mcp-full",
+                "server": "files",
+                "tool": "read",
+                "status": "completed",
+                "arguments": {"path": "README.md"},
+                "result": {"content": [{"type": "text", "text": "read"}]},
+                "error": null
+            }), 150),
+            item_entry("turn-1", json!({
+                "type": "dynamicToolCall",
+                "id": "dynamic-full",
+                "namespace": "local",
+                "tool": "lookup",
+                "arguments": {"query": "bridge"},
+                "status": "completed",
+                "contentItems": [{"type": "inputText", "text": "found"}],
+                "success": true
+            }), 160),
+            item_entry("turn-1", json!({
+                "type": "functionCallOutput",
+                "id": "function-output-full",
+                "name": "lookup",
+                "namespace": "local",
+                "output": {"type": "text", "text": "found"}
+            }), 170),
+            item_entry("turn-1", json!({
+                "type": "webSearch",
+                "id": "search-full",
+                "query": "Codex app server",
+                "action": null,
+                "results": null
+            }), 180),
+            item_entry("turn-1", json!({
+                "type": "imageView",
+                "id": "image-full",
+                "path": "/tmp/project/image.png"
+            }), 190),
+            item_entry("turn-1", json!({
+                "type": "futureItem",
+                "id": "future-full",
+                "payloadValue": 42
+            }), 200)
+        ],
+        "nextCursor": null
+    })
+}
+
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "ok".into());
     let stdin = std::io::stdin();
@@ -269,6 +348,21 @@ fn main() {
             "thread/turns/list" => {
                 if mode == "unsupported-items" {
                     emit_error(id, -32601, "thread/turns/list is not supported yet");
+                } else if mode == "full-fidelity" {
+                    emit(json!({
+                        "id": id,
+                        "result": {
+                            "data": [{
+                                "id": "turn-1",
+                                "status": "completed",
+                                "itemsView": "notLoaded",
+                                "items": [],
+                                "startedAt": 110,
+                                "completedAt": 210
+                            }],
+                            "nextCursor": null
+                        }
+                    }));
                 } else {
                     let cursor = request["params"]["cursor"].as_str();
                     emit(json!({"id": id, "result": thread_turns_page(cursor)}));
@@ -292,7 +386,9 @@ fn main() {
                 } else {
                     let turn_id = request["params"]["turnId"].as_str().unwrap_or_default();
                     let cursor = request["params"]["cursor"].as_str();
-                    if mode == "current-protocol" && turn_id.is_empty() {
+                    if mode == "full-fidelity" {
+                        emit(json!({"id": id, "result": full_fidelity_items_page()}));
+                    } else if mode == "current-protocol" && turn_id.is_empty() {
                         emit(json!({
                             "id": id,
                             "result": {
