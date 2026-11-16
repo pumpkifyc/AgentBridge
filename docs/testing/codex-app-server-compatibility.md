@@ -1,6 +1,6 @@
 # Codex App Server 公开接口与本机兼容性记录
 
-日期：2026-11-13
+日期：2026-11-16
 测试环境：macOS 15.6.0、Codex CLI 0.167.2。
 
 ## 结论
@@ -12,7 +12,7 @@ Codex 提供了公开的 App Server JSON-RPC 接口。AgentBridge 使用 `initia
 ## 本机实测
 
 - `codex app-server --stdio` 可启动并完成握手；握手后还会发送 `remoteControl/status/changed` 等通知，客户端必须按 JSON-RPC 请求 ID 关联响应。
-- `thread/list` 可返回本机 Codex 会话；AgentBridge 使用 `updated_at` 倒序分页，并把每一页合并为前端会话列表。
+- `thread/list` 可返回本机 Codex 会话；AgentBridge 使用 `updated_at` 倒序分页，并把每一页合并为前端会话列表。请求会传入公开实验字段 `useStateDbOnly: true`，避免 Codex 0.167.2 的 rollout 扫描修复漏掉刚创建、尚无独立轮次的分支会话。实测同一分支在默认扫描模式下不返回，使用状态索引模式后可正常返回，随后仍通过 `thread/read` 和 `thread/turns/list` 读取继承历史。
 - `thread/read` 只用于读取 thread 元数据，`thread/turns/list` 用于读取轮次。历史条目改用当前公开的 `thread/items/list`，按整个 thread 分页读取后再按 `turnId` 分组。
 - `thread/read` 的 `thread.path` 可用于定位 rollout。已确认 `.jsonl` 和 `.jsonl.zst` 会出现在 `sessions/` 或 `archived_sessions/`。
 - `thread/fork` 支持按 thread ID 分叉，`lastTurnId` 可把分叉截止到指定已完成轮次，`thread/name/set` 可设置会话名称。

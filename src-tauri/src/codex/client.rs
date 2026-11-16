@@ -250,7 +250,8 @@ impl CodexClient {
                 "sortDirection": "desc",
                 "sortKey": "updated_at",
                 "archived": false,
-                "sourceKinds": ["cli", "vscode", "exec", "appServer", "unknown"]
+                "sourceKinds": ["cli", "vscode", "exec", "appServer", "unknown"],
+                "useStateDbOnly": true
             }),
         )?;
         let page: ThreadListResponse = serde_json::from_value(response)

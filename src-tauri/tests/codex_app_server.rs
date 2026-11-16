@@ -92,6 +92,18 @@ fn handshake_tolerates_notifications_and_correlates_response_ids() {
 }
 
 #[test]
+fn list_threads_includes_new_branches_indexed_only_in_the_state_db() {
+    let (dir, mut client) = connect("branch-state-db", "branch-state-db");
+    let page = client
+        .list_threads(None)
+        .expect("应列出刚创建但尚无独立轮次的分支会话");
+    assert_eq!(page.data.len(), 1);
+    assert_eq!(page.data[0].id, "branch-thread");
+    drop(client);
+    remove_dir(&dir);
+}
+
+#[test]
 fn read_snapshot_pages_turns_and_items_without_replaying_tool_arguments() {
     let (dir, mut client) = connect("snapshot", "ok");
     let snapshot = client

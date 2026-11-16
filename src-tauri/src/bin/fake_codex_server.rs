@@ -411,7 +411,13 @@ fn main() {
                     "params": {"status": "disabled"}
                 }));
                 emit(json!({"id": id + 10_000, "result": {}}));
-                let page = if request["params"]["cursor"].is_null() {
+                let page = if mode == "branch-state-db" {
+                    if request["params"]["useStateDbOnly"].as_bool() == Some(true) {
+                        json!({"data": [thread_wire("branch-thread")], "nextCursor": null})
+                    } else {
+                        json!({"data": [], "nextCursor": null})
+                    }
+                } else if request["params"]["cursor"].is_null() {
                     json!({"data": [thread_wire("thread-1")], "nextCursor": "page-2"})
                 } else {
                     json!({"data": [thread_wire("thread-2")], "nextCursor": null})
