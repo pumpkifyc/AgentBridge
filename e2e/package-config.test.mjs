@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const config = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+const releaseConfig = JSON.parse(readFileSync(new URL("../src-tauri/tauri.release.conf.json", import.meta.url), "utf8"));
 const cargo = readFileSync(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8");
+const lib = readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
+const capability = JSON.parse(readFileSync(new URL("../src-tauri/capabilities/default.json", import.meta.url), "utf8"));
 const workflow = readFileSync(new URL("../.github/workflows/build.yml", import.meta.url), "utf8");
 const acceptance = readFileSync(new URL("../docs/testing/cross-platform-acceptance.md", import.meta.url), "utf8");
 const checklist = readFileSync(new URL("./share-import-checklist.md", import.meta.url), "utf8");
@@ -23,6 +26,25 @@ test("桌面窗口以工作台尺寸打开并保留可用的最小边界", () =>
     minHeight: 720,
     center: true,
   });
+});
+
+test("应用配置公开更新来源并保留最小权限", () => {
+  assert.deepEqual(config.plugins.updater.endpoints, [
+    "https://github.com/pumpkifyc/AgentBridge/releases/latest/download/latest.json",
+  ]);
+  assert.ok(config.plugins.updater.pubkey.length > 20);
+  assert.ok(capability.permissions.includes("updater:default"));
+  assert.ok(capability.permissions.includes("process:allow-restart"));
+  assert.equal(capability.permissions.includes("process:default"), false);
+});
+
+test("普通构建与正式更新构建分离", () => {
+  assert.equal(config.bundle.createUpdaterArtifacts, false);
+  assert.equal(releaseConfig.bundle.createUpdaterArtifacts, true);
+  assert.match(cargo, /tauri-plugin-updater/);
+  assert.match(cargo, /tauri-plugin-process/);
+  assert.match(lib, /tauri_plugin_updater::Builder/);
+  assert.match(lib, /tauri_plugin_process::init/);
 });
 
 test("Windows NSIS 使用当前用户安装且配置可被 Tauri 解析", () => {

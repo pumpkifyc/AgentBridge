@@ -24,6 +24,14 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/pumpkifyc/AgentBridge/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQwQUQ0NkMwMTUzMEYxQUMKUldTczhUQVZ3RWF0UUtPajV4L01JQWJvR3o4bzRqQUlUSXZNNDlyOGNldUVoWmFyVFV1MzNrNFEK"
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["app", "dmg", "nsis"],
