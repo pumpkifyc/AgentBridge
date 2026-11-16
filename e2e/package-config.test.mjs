@@ -5,7 +5,10 @@ import test from "node:test";
 const config = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 const releaseConfig = JSON.parse(readFileSync(new URL("../src-tauri/tauri.release.conf.json", import.meta.url), "utf8"));
 const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
-const cargo = readFileSync(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8");
+const cargo = readFileSync(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8").replaceAll(
+  "\r\n",
+  "\n",
+);
 const lib = readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
 const capability = JSON.parse(readFileSync(new URL("../src-tauri/capabilities/default.json", import.meta.url), "utf8"));
 const workflow = readFileSync(new URL("../.github/workflows/build.yml", import.meta.url), "utf8");
