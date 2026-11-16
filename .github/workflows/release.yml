@@ -1,0 +1,201 @@
+name: 发布签名桌面版本
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agentbridge-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: 校验发布版本
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: 安装前端依赖
+        run: npm ci
+      - name: 校验标签与版本说明
+        run: npm run release:validate -- --tag "${{ github.ref_name }}"
+      - name: 打包配置检查
+        run: npm run test:e2e-config
+      - name: 前端测试
+        run: npm test -- --run
+      - name: Rust 测试
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Rust 静态分析
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+  build-macos:
+    name: 构建 macOS universal 签名制品
+    needs: verify
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: release-macos-universal
+      - name: 安装前端依赖
+        run: npm ci
+      - name: 构建并签名 macOS universal 更新制品
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --target universal-apple-darwin --config src-tauri/tauri.release.conf.json
+      - name: 生成 macOS 更新平台元数据
+        shell: bash
+        run: |
+          node - darwin-aarch64 src-tauri/target/universal-apple-darwin/release/bundle/macos .app.tar.gz <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const [platform, directory, suffix] = process.argv.slice(2);
+          const fileName = fs.readdirSync(directory).find((name) => name.endsWith(suffix));
+          if (!fileName) throw new Error(`找不到 ${suffix} 更新制品`);
+          const signature = fs.readFileSync(path.join(directory, `${fileName}.sig`), "utf8").trim();
+          const output = path.join("release-assets", platform);
+          fs.mkdirSync(output, { recursive: true });
+          fs.writeFileSync(
+            path.join(output, "updater-target.json"),
+            JSON.stringify({ platform, fileName, signature }, null, 2),
+          );
+          NODE
+          node - darwin-x86_64 src-tauri/target/universal-apple-darwin/release/bundle/macos .app.tar.gz <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const [platform, directory, suffix] = process.argv.slice(2);
+          const fileName = fs.readdirSync(directory).find((name) => name.endsWith(suffix));
+          if (!fileName) throw new Error(`找不到 ${suffix} 更新制品`);
+          const signature = fs.readFileSync(path.join(directory, `${fileName}.sig`), "utf8").trim();
+          const output = path.join("release-assets", platform);
+          fs.mkdirSync(output, { recursive: true });
+          fs.writeFileSync(
+            path.join(output, "updater-target.json"),
+            JSON.stringify({ platform, fileName, signature }, null, 2),
+          );
+          NODE
+      - name: 上传 macOS 发布制品
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentbridge-${{ github.ref_name }}-macos
+          path: |
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+            release-assets/**/updater-target.json
+          if-no-files-found: error
+
+  build-windows:
+    name: 构建 Windows x64 签名安装包
+    needs: verify
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: release-windows-x64
+      - name: 安装前端依赖
+        run: npm ci
+      - name: 构建并签名 Windows NSIS 更新制品
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --config src-tauri/tauri.release.conf.json
+      - name: 生成 Windows 更新平台元数据
+        shell: bash
+        run: |
+          node - windows-x86_64 src-tauri/target/release/bundle/nsis -setup.exe <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const [platform, directory, suffix] = process.argv.slice(2);
+          const fileName = fs.readdirSync(directory).find((name) => name.endsWith(suffix) && !name.endsWith(".sig"));
+          if (!fileName) throw new Error(`找不到 ${suffix} 更新制品`);
+          const signature = fs.readFileSync(path.join(directory, `${fileName}.sig`), "utf8").trim();
+          const output = path.join("release-assets", platform);
+          fs.mkdirSync(output, { recursive: true });
+          fs.writeFileSync(
+            path.join(output, "updater-target.json"),
+            JSON.stringify({ platform, fileName, signature }, null, 2),
+          );
+          NODE
+      - name: 上传 Windows 发布制品
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentbridge-${{ github.ref_name }}-windows-x64
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            src-tauri/target/release/bundle/nsis/*-setup.exe.sig
+            release-assets/**/updater-target.json
+          if-no-files-found: error
+
+  publish:
+    name: 汇总并发布正式版本
+    needs:
+      - build-macos
+      - build-windows
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 下载双平台发布制品
+        uses: actions/download-artifact@v4
+        with:
+          pattern: agentbridge-${{ github.ref_name }}-*
+          path: release-assets
+      - name: 生成中文发布说明
+        run: node scripts/release-metadata.mjs notes --tag "${{ github.ref_name }}" --output "$RUNNER_TEMP/release-notes.md"
+      - name: 生成并校验更新清单
+        run: node scripts/release-metadata.mjs manifest --tag "${{ github.ref_name }}" --artifacts release-assets --output release-assets/latest.json
+      - name: 创建草稿 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets=()
+          while IFS= read -r file; do
+            assets+=("$file")
+          done < <(find release-assets -type f ! -name updater-target.json)
+          if (( ${#assets[@]} < 6 )); then
+            echo "发布制品数量不足：${#assets[@]}" >&2
+            exit 1
+          fi
+          gh release create "${{ github.ref_name }}" "${assets[@]}" \
+            --draft \
+            --title "AgentBridge ${{ github.ref_name }}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+      - name: 公开已校验 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${{ github.ref_name }}" --draft=false

@@ -4,10 +4,12 @@ import test from "node:test";
 
 const config = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 const releaseConfig = JSON.parse(readFileSync(new URL("../src-tauri/tauri.release.conf.json", import.meta.url), "utf8"));
+const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const cargo = readFileSync(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8");
 const lib = readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
 const capability = JSON.parse(readFileSync(new URL("../src-tauri/capabilities/default.json", import.meta.url), "utf8"));
 const workflow = readFileSync(new URL("../.github/workflows/build.yml", import.meta.url), "utf8");
+const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
 const acceptance = readFileSync(new URL("../docs/testing/cross-platform-acceptance.md", import.meta.url), "utf8");
 const checklist = readFileSync(new URL("./share-import-checklist.md", import.meta.url), "utf8");
 
@@ -47,6 +49,26 @@ test("普通构建与正式更新构建分离", () => {
   assert.match(lib, /tauri_plugin_process::init/);
 });
 
+test("正式发布版本在三处配置中保持一致", () => {
+  assert.equal(packageJson.version, "0.1.1");
+  assert.equal(config.version, "0.1.1");
+  assert.match(cargo, /^version = "0\.1\.1"$/m);
+});
+
+test("版本标签触发双平台签名发布", () => {
+  assert.match(releaseWorkflow, /tags:\s*\n\s*- "v\*\.\*\.\*"/);
+  assert.match(releaseWorkflow, /contents: write/);
+  assert.match(releaseWorkflow, /TAURI_SIGNING_PRIVATE_KEY/);
+  assert.match(releaseWorkflow, /TAURI_SIGNING_PRIVATE_KEY_PASSWORD/);
+  assert.match(releaseWorkflow, /universal-apple-darwin/);
+  assert.match(releaseWorkflow, /windows-2022/);
+  assert.match(releaseWorkflow, /tauri\.release\.conf\.json/);
+  assert.match(releaseWorkflow, /release-metadata\.mjs/);
+  assert.match(releaseWorkflow, /--draft/);
+  assert.doesNotMatch(releaseWorkflow, /-----BEGIN.*PRIVATE KEY-----/s);
+  assert.doesNotMatch(releaseWorkflow, /npm run tauri:build/);
+});
+
 test("Windows NSIS 使用当前用户安装且配置可被 Tauri 解析", () => {
   assert.equal(config.bundle.windows.nsis.installMode, "currentUser");
   assert.match(workflow, /macos-15/);
@@ -70,6 +92,7 @@ test("CI 不写入签名密钥，并在双平台执行统一验证与构建", ()
   ]) {
     assert.ok(workflow.includes(step), `CI 缺少步骤：${step}`);
   }
+  assert.doesNotMatch(workflow, /gh release create|tauri-apps\/tauri-action/);
 });
 
 test("中文验收文档覆盖双向真机与发布前未完成项", () => {
