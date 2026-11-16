@@ -10,6 +10,9 @@
     "tauri": "tauri",
     "test": "vitest",
     "test:e2e-config": "node --test e2e/*.test.mjs",
+    "release:validate": "node scripts/release-metadata.mjs validate",
+    "release:notes": "node scripts/release-metadata.mjs notes",
+    "release:manifest": "node scripts/release-metadata.mjs manifest",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "tauri:install": "tauri build && node scripts/install-latest.mjs"
