@@ -6,9 +6,17 @@ authors = ["AgentBridge"]
 edition = "2024"
 default-run = "agentbridge"
 
+[features]
+test-fixtures = []
+
 [[bin]]
 name = "agentbridge"
 path = "src/main.rs"
+
+[[bin]]
+name = "fake_codex_server"
+path = "src/bin/fake_codex_server.rs"
+required-features = ["test-fixtures"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

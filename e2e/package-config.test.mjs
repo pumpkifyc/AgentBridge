@@ -82,18 +82,36 @@ test("存在测试辅助二进制时仍明确指定应用主二进制", () => {
   assert.match(cargo, /^\[\[bin\]\][\s\S]*?^name = "agentbridge"$/m);
 });
 
+test("测试辅助 App Server 仅在显式启用测试特性时构建", () => {
+  assert.match(cargo, /^\[features\]\ntest-fixtures = \[\]$/m);
+  assert.match(
+    cargo,
+    /^\[\[bin\]\]\nname = "fake_codex_server"\npath = "src\/bin\/fake_codex_server\.rs"\nrequired-features = \["test-fixtures"\]$/m,
+  );
+});
+
 test("CI 不写入签名密钥，并在双平台执行统一验证与构建", () => {
   assert.doesNotMatch(workflow, /APPLE_CERTIFICATE|WINDOWS_CERTIFICATE|SIGNING_SECRET/);
   for (const step of [
     "npm ci",
     "npm run test:e2e-config",
     "npm test -- --run",
-    "cargo test --manifest-path src-tauri/Cargo.toml",
-    "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
+    "cargo test --manifest-path src-tauri/Cargo.toml --features test-fixtures",
+    "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features test-fixtures -- -D warnings",
     "npm run tauri:build",
   ]) {
     assert.ok(workflow.includes(step), `CI 缺少步骤：${step}`);
   }
+  assert.ok(
+    releaseWorkflow.includes(
+      "cargo test --manifest-path src-tauri/Cargo.toml --features test-fixtures",
+    ),
+  );
+  assert.ok(
+    releaseWorkflow.includes(
+      "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features test-fixtures -- -D warnings",
+    ),
+  );
   assert.doesNotMatch(workflow, /gh release create|tauri-apps\/tauri-action/);
 });
 

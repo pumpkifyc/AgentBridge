@@ -41,9 +41,9 @@ jobs:
       - name: 前端测试
         run: npm test -- --run
       - name: Rust 测试
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features test-fixtures
       - name: Rust 静态分析
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features test-fixtures -- -D warnings
       - name: 构建未签名桌面开发制品
         run: npm run tauri:build
       - name: 上传制品

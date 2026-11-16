@@ -10,8 +10,8 @@
 | 自动化环境 | `macos-15`（GitHub Actions） | `windows-2022`（GitHub Actions） | 工作流已配置，尚未在 GitHub runner 执行 |
 | 本机开发构建 | macOS 15.6.0、Apple Silicon、Tauri CLI 2.12.4；`npm run tauri:build` 生成 `.app` 8.65 MiB 和 `.dmg` 4.22 MiB | 未执行 | macOS 已通过，Windows 须在原生 runner 执行 |
 | 前端测试 | `npm test -- --run` | 同左 | 双平台 CI 步骤已配置；本机结果见实施账本 |
-| Rust 测试 | `cargo test --manifest-path src-tauri/Cargo.toml` | 同左 | 双平台 CI 步骤已配置；本机结果见实施账本 |
-| 静态分析 | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 同左 | 双平台 CI 步骤已配置；本机结果见实施账本 |
+| Rust 测试 | `cargo test --manifest-path src-tauri/Cargo.toml --features test-fixtures` | 同左 | 双平台 CI 步骤已配置；本机结果见实施账本 |
+| 静态分析 | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features test-fixtures -- -D warnings` | 同左 | 双平台 CI 步骤已配置；本机结果见实施账本 |
 | 打包配置断言 | `npm run test:e2e-config` | 同左 | 本机已通过；双平台 CI 步骤已配置 |
 | 未签名制品 | `macos/*.app`、`dmg/*.dmg` | `nsis/*.exe` | macOS 本机已生成；Windows 制品待 runner 验证 |
 

@@ -37,9 +37,9 @@ jobs:
       - name: 前端测试
         run: npm test -- --run
       - name: Rust 测试
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features test-fixtures
       - name: Rust 静态分析
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features test-fixtures -- -D warnings
 
   build-macos:
     name: 构建 macOS universal 签名制品
