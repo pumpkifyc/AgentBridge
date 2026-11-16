@@ -19,7 +19,13 @@ AgentBridge 是一款在局域网内原生分享 Codex 会话的 macOS 和 Windo
 - `npm run release:notes -- --tag vX.Y.Z --output release-notes.md`：提取 Release 和应用内共用的中文说明。
 - `npm run release:manifest -- --tag vX.Y.Z --artifacts release-assets --output latest.json`：生成并校验三平台 Tauri 更新清单。
 
-Windows 安装包需在 Windows 主机或 CI runner 上构建。
+## 下载最新版
+
+- [macOS 通用安装包](https://github.com/pumpkifyc/AgentBridge/releases/download/v0.1.1/AgentBridge_0.1.1_universal.dmg)
+- [Windows x64 安装包](https://github.com/pumpkifyc/AgentBridge/releases/download/v0.1.1/AgentBridge_0.1.1_x64-setup.exe)
+- [全部版本与发布说明](https://github.com/pumpkifyc/AgentBridge/releases)
+
+Windows 安装包在 GitHub Actions 的 Windows runner 上构建；当前版本已同时发布 macOS universal 和 Windows x64 制品。
 
 ## 应用内更新
 
@@ -66,6 +72,6 @@ https://github.com/pumpkifyc/AgentBridge/releases/latest/download/latest.json
 - 应用内更新验收：[应用内更新真机验收](docs/testing/in-app-updater-acceptance.md)。
 - 人工步骤：[分享与导入验收清单](e2e/share-import-checklist.md)。
 
-macOS 未签名的 `.app` 和 `.dmg` 已在本机成功构建；Windows NSIS 安装包、GitHub Actions 双平台运行、双向真机分享和 Codex 桌面版历史可见性仍需按上述文档执行发布前验收。当前 macOS 已使用 Codex CLI 0.167.2 在临时 `CODEX_HOME` 验证原生包安装和 `thread/fork`，单机结果不能替代双平台真机验收。
+macOS 和 Windows 双平台 CI 已通过，`v0.1.1` Release 已发布带 Tauri 更新签名的 macOS universal 与 Windows x64 制品；Apple Silicon macOS 上的 `0.1.0 → 0.1.1` 应用内升级已实机通过，且应用数据保持不变。Intel Mac、Windows 真机升级、双向真机分享和 Codex 桌面版历史可见性仍需按上述文档执行验收。当前 macOS 已使用 Codex CLI 0.167.2 在临时 `CODEX_HOME` 验证原生包安装和 `thread/fork`，单机结果不能替代双平台真机验收。
 
 `.github/workflows/build.yml` 在 macOS 和 Windows runner 上运行配置检查、前端测试、Rust 测试、clippy 和未签名开发构建；`.github/workflows/release.yml` 只在版本标签触发，构建并签名正式更新制品。Apple 签名与公证、Windows 代码签名仍属于正式稳定分发前的外部发布条件。

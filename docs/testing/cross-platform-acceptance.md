@@ -7,17 +7,18 @@
 
 | 项目 | macOS | Windows | 当前状态 |
 | --- | --- | --- | --- |
-| 自动化环境 | `macos-15`（GitHub Actions） | `windows-2022`（GitHub Actions） | 工作流已配置，尚未在 GitHub runner 执行 |
-| 本机开发构建 | macOS 15.6.0、Apple Silicon、Tauri CLI 2.12.4；`npm run tauri:build` 生成 `.app` 8.65 MiB 和 `.dmg` 4.22 MiB | 未执行 | macOS 已通过，Windows 须在原生 runner 执行 |
-| 前端测试 | `npm test -- --run` | 同左 | 双平台 CI 步骤已配置；本机结果见实施账本 |
-| Rust 测试 | `cargo test --manifest-path src-tauri/Cargo.toml --features test-fixtures` | 同左 | 双平台 CI 步骤已配置；本机结果见实施账本 |
-| 静态分析 | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features test-fixtures -- -D warnings` | 同左 | 双平台 CI 步骤已配置；本机结果见实施账本 |
-| 打包配置断言 | `npm run test:e2e-config` | 同左 | 本机已通过；双平台 CI 步骤已配置 |
-| 未签名制品 | `macos/*.app`、`dmg/*.dmg` | `nsis/*.exe` | macOS 本机已生成；Windows 制品待 runner 验证 |
+| 自动化环境 | `macos-15`（GitHub Actions） | `windows-2022`（GitHub Actions） | 常规 CI 运行 `43809824114` 全部通过 |
+| 本机开发构建 | macOS 15.6.0、Apple Silicon、Tauri CLI 2.12.4；`npm run tauri:build` 生成 `.app` 9.51 MiB 和 `.dmg` 4.66 MiB | GitHub runner 通过 | macOS 本机与 Windows runner 均已通过 |
+| 前端测试 | `npm test -- --run` | 同左 | 双平台 CI 通过；本机 17 个文件、93 项测试通过 |
+| Rust 测试 | `cargo test --manifest-path src-tauri/Cargo.toml --features test-fixtures` | 同左 | 双平台 CI 通过；本机全量测试通过 |
+| 静态分析 | `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features test-fixtures -- -D warnings` | 同左 | 双平台 CI 通过；本机通过 |
+| 打包配置断言 | `npm run test:e2e-config` | 同左 | 本机与双平台 CI 通过 |
+| 未签名制品 | `macos/*.app`、`dmg/*.dmg` | `nsis/*.exe` | 两个平台均由 workflow 生成 |
+| 正式签名制品 | macOS universal `.app.tar.gz` 与 DMG | Windows x64 NSIS | 发布运行 `43809834082` 全部通过，三平台更新签名非空 |
 
 常规 CI 位于 `.github/workflows/build.yml`，只上传未签名开发制品。版本标签发布位于 `.github/workflows/release.yml`，使用 Tauri 更新签名生成 `latest.json` 和双平台更新制品；详细流程见 [应用内更新真机验收](in-app-updater-acceptance.md)。macOS 构建目标为 `app` 和 `dmg`，最低系统版本为 macOS 11.0；Windows 构建目标为 NSIS `currentUser` 安装包。Apple 签名与公证、Windows 代码签名仍须在正式稳定分发前配置和验证。
 
-自动化命令 `npm run test:e2e-config` 检查安装包目标、NSIS 安装模式、CI 矩阵、无签名秘密，以及存在测试辅助二进制时是否明确指定应用主二进制。真正验证 Tauri 能否解析配置仍需 `npm run tauri:build`；该命令已在本机 macOS 完整运行成功。
+自动化命令 `npm run test:e2e-config` 检查安装包目标、NSIS 安装模式、CI 矩阵、无签名秘密，以及测试辅助 App Server 仅在显式启用 `test-fixtures` 特性时构建。正式包已验证不再包含 `fake_codex_server`；`npm run tauri:build` 与 macOS universal 发布构建均成功。
 
 ## 兼容性前提
 
@@ -81,4 +82,4 @@
 - 单个原生会话包最大 256 MiB，最多包含 64 个 rollout 文件。
 - 没有可依赖的公开 Codex 桌面版 deep link 来打开指定第三方 thread。
 - 删除导入记录不会删除已创建的 Codex thread，用户需在 Codex 中自行管理。
-- Windows 原生目录选择器、NSIS 安装包和 Codex 桌面版行为尚未在本会话验证；需要 Windows 主机执行验收清单。
+- Windows NSIS 安装包已由 GitHub runner 成功构建并通过公开地址下载核对；Windows 真机的原生目录选择器、NSIS 安装和 Codex 桌面版行为尚未验证，需要 Windows 主机执行验收清单。
