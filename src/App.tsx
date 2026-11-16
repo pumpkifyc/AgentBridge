@@ -3,6 +3,7 @@ import "./App.css";
 import { ReceivePage } from "./features/receive/ReceivePage";
 import { HistoryPage } from "./features/history/HistoryPage";
 import { SharePage } from "./features/share/SharePage";
+import { UpdateControl } from "./features/updater/UpdateControl";
 
 type View = "home" | "share" | "receive" | "history";
 
@@ -24,7 +25,10 @@ function App() {
           <p className="eyebrow">局域网会话工作台</p>
           <h1>AgentBridge</h1>
         </div>
-        <span className="connection-status">点对点 · 无云端中继</span>
+        <div className="topbar-status">
+          <span className="connection-status">点对点 · 无云端中继</span>
+          <UpdateControl />
+        </div>
       </header>
 
       <nav className="main-nav" aria-label="主导航">

@@ -32,6 +32,20 @@ export interface UpdateProgress {
   percent?: number;
 }
 
+export type UpdateUiState =
+  | { kind: "idle"; currentVersion: string }
+  | { kind: "checking"; currentVersion: string }
+  | { kind: "current"; currentVersion: string; checkedAt: Date }
+  | { kind: "available"; update: AvailableUpdate }
+  | { kind: "confirm"; update: AvailableUpdate }
+  | { kind: "downloading"; update: AvailableUpdate; progress: UpdateProgress }
+  | { kind: "installing"; update: AvailableUpdate }
+  | {
+      kind: "error";
+      message: string;
+      retry: "check" | "download" | null;
+    };
+
 export interface ManualUpdater {
   currentVersion(): Promise<string>;
   check(): Promise<AvailableUpdate | null>;
