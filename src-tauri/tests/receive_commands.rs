@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs,
     net::{IpAddr, Ipv4Addr},
-    sync::{Arc, Once, OnceLock},
+    sync::{
+        Arc, Once, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 use tauri::{
@@ -132,13 +135,11 @@ fn snapshot() -> SnapshotV1 {
 }
 
 fn native_bundle(snapshot: &SnapshotV1) -> Vec<u8> {
+    static NEXT_BUNDLE_ID: AtomicU64 = AtomicU64::new(0);
     let root = std::env::temp_dir().join(format!(
         "agentbridge-receive-native-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("系统时间有效")
-            .as_nanos()
+        NEXT_BUNDLE_ID.fetch_add(1, Ordering::Relaxed)
     ));
     let sessions = root.join("sessions/2026/11/13");
     fs::create_dir_all(&sessions).expect("创建测试会话目录");
