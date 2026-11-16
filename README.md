@@ -15,8 +15,29 @@ AgentBridge 是一款在局域网内原生分享 Codex 会话的 macOS 和 Windo
 - `npm run build`：构建前端资源。
 - `npm run tauri:build`：构建当前平台桌面安装包。
 - `npm run tauri:install`：构建当前平台最新版并自动安装、重新打开；macOS 覆盖 `/Applications/AgentBridge.app`，Windows 静默运行最新 NSIS 安装包。
+- `npm run release:validate -- --tag vX.Y.Z`：校验标签、三处应用版本和中文更新日志。
+- `npm run release:notes -- --tag vX.Y.Z --output release-notes.md`：提取 Release 和应用内共用的中文说明。
+- `npm run release:manifest -- --tag vX.Y.Z --artifacts release-assets --output latest.json`：生成并校验三平台 Tauri 更新清单。
 
 Windows 安装包需在 Windows 主机或 CI runner 上构建。
+
+## 应用内更新
+
+顶栏会显示当前版本和「检查更新」按钮。应用只会在用户主动点击后访问公开更新清单；启动、运行和退出时都不会自动检查、下载或安装更新。
+
+发现新版本后，应用先展示当前版本、新版本、发布日期和 `CHANGELOG.md` 中的中文更新说明。用户点击「下载并更新」后还需在确认弹窗点击「确认更新」，随后才会下载、验证 Tauri 更新签名、安装并重启。下载或签名验证失败时保留当前版本，示例和验收步骤见 [应用内更新真机验收](docs/testing/in-app-updater-acceptance.md)。
+
+公开更新地址为：
+
+```text
+https://github.com/pumpkifyc/AgentBridge/releases/latest/download/latest.json
+```
+
+只有推送 `vX.Y.Z` 版本标签才会由 `.github/workflows/release.yml` 创建正式 Release。普通分支 CI 只构建开发制品。发布工作流使用 GitHub Actions Secrets 中的 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 签名更新制品；私钥不会进入客户端或仓库。
+
+**Tauri 更新签名**用于证明更新制品未被篡改，不能代替 **Apple 签名与公证** 或 **Windows 代码签名**。没有操作系统签名证书时，系统仍可能显示 Gatekeeper 或 SmartScreen 警告；正式稳定分发前必须分别验证这些系统安全行为。
+
+`npm run tauri:install` 只用于当前开发机把验证后的最新源码安装到本机，不是正式用户的自动升级机制。
 
 ## 找不到 Codex CLI
 
@@ -42,8 +63,9 @@ Windows 安装包需在 Windows 主机或 CI runner 上构建。
 - 原生包与导入机制：[Codex 原生会话包与导入机制](docs/native-session-import.md)。
 - 接口兼容性：[Codex App Server 公开接口与本机兼容性记录](docs/testing/codex-app-server-compatibility.md)。
 - 打包与双平台真机矩阵：[跨平台打包与验收记录](docs/testing/cross-platform-acceptance.md)。
+- 应用内更新验收：[应用内更新真机验收](docs/testing/in-app-updater-acceptance.md)。
 - 人工步骤：[分享与导入验收清单](e2e/share-import-checklist.md)。
 
 macOS 未签名的 `.app` 和 `.dmg` 已在本机成功构建；Windows NSIS 安装包、GitHub Actions 双平台运行、双向真机分享和 Codex 桌面版历史可见性仍需按上述文档执行发布前验收。当前 macOS 已使用 Codex CLI 0.167.2 在临时 `CODEX_HOME` 验证原生包安装和 `thread/fork`，单机结果不能替代双平台真机验收。
 
-`.github/workflows/build.yml` 在 macOS 和 Windows runner 上运行配置检查、前端测试、Rust 测试、clippy 和未签名发布构建；正式签名与公证不在第一版开发构建范围内。
+`.github/workflows/build.yml` 在 macOS 和 Windows runner 上运行配置检查、前端测试、Rust 测试、clippy 和未签名开发构建；`.github/workflows/release.yml` 只在版本标签触发，构建并签名正式更新制品。Apple 签名与公证、Windows 代码签名仍属于正式稳定分发前的外部发布条件。

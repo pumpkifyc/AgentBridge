@@ -12,6 +12,8 @@ const workflow = readFileSync(new URL("../.github/workflows/build.yml", import.m
 const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
 const acceptance = readFileSync(new URL("../docs/testing/cross-platform-acceptance.md", import.meta.url), "utf8");
 const checklist = readFileSync(new URL("./share-import-checklist.md", import.meta.url), "utf8");
+const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+const updaterAcceptance = readFileSync(new URL("../docs/testing/in-app-updater-acceptance.md", import.meta.url), "utf8");
 
 test("macOS 与 Windows 安装包目标都已配置", () => {
   assert.deepEqual(config.bundle.targets, ["app", "dmg", "nsis"]);
@@ -117,4 +119,27 @@ test("中文验收文档覆盖双向真机与发布前未完成项", () => {
   }
   assert.match(checklist, /C:\\Users/);
   assert.match(checklist, /\/Users\//);
+});
+
+test("中文文档说明手动更新、签名和双平台验收", () => {
+  for (const text of [
+    "检查更新",
+    "下载并更新",
+    "确认更新",
+    "不会自动安装",
+    "Tauri 更新签名",
+    "Apple 签名与公证",
+    "Windows 代码签名",
+    "0.1.0 → 0.1.1",
+  ]) {
+    assert.ok(`${readme}\n${updaterAcceptance}`.includes(text), `文档缺少：${text}`);
+  }
+  assert.match(updaterAcceptance, /Apple Silicon/);
+  assert.match(updaterAcceptance, /Intel Mac/);
+  assert.match(updaterAcceptance, /Windows x64/);
+  assert.match(updaterAcceptance, /网络中断/);
+  assert.match(updaterAcceptance, /签名校验失败/);
+  assert.match(updaterAcceptance, /磁盘空间不足/);
+  assert.match(updaterAcceptance, /应用文件被占用/);
+  assert.match(updaterAcceptance, /应用数据保持不变/);
 });

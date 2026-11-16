@@ -1,7 +1,7 @@
 # 跨平台打包与验收记录
 
-文档日期：2026-11-13
-适用范围：AgentBridge 0.1.0，第一版「局域网内分享 Codex 会话」。
+文档日期：2026-11-16
+适用范围：AgentBridge 0.1.1，局域网 Codex 会话分享与应用内手动更新。
 
 ## 构建与自动化验证
 
@@ -15,7 +15,7 @@
 | 打包配置断言 | `npm run test:e2e-config` | 同左 | 本机已通过；双平台 CI 步骤已配置 |
 | 未签名制品 | `macos/*.app`、`dmg/*.dmg` | `nsis/*.exe` | macOS 本机已生成；Windows 制品待 runner 验证 |
 
-CI 工作流位于 `.github/workflows/build.yml`，只上传未签名开发制品，不配置 Apple 证书、Windows 代码签名证书、更新器签名密钥或仓库秘密。macOS 构建目标为 `app` 和 `dmg`，最低系统版本为 macOS 11.0；Windows 构建目标为 NSIS `currentUser` 安装包。正式分发所需的签名、公证和安装包加固必须另行执行。
+常规 CI 位于 `.github/workflows/build.yml`，只上传未签名开发制品。版本标签发布位于 `.github/workflows/release.yml`，使用 Tauri 更新签名生成 `latest.json` 和双平台更新制品；详细流程见 [应用内更新真机验收](in-app-updater-acceptance.md)。macOS 构建目标为 `app` 和 `dmg`，最低系统版本为 macOS 11.0；Windows 构建目标为 NSIS `currentUser` 安装包。Apple 签名与公证、Windows 代码签名仍须在正式稳定分发前配置和验证。
 
 自动化命令 `npm run test:e2e-config` 检查安装包目标、NSIS 安装模式、CI 矩阵、无签名秘密，以及存在测试辅助二进制时是否明确指定应用主二进制。真正验证 Tauri 能否解析配置仍需 `npm run tauri:build`；该命令已在本机 macOS 完整运行成功。
 
@@ -74,7 +74,8 @@ CI 工作流位于 `.github/workflows/build.yml`，只上传未签名开发制�
 
 ## 已知限制
 
-- 第一版是未签名开发构建，不包含自动更新、证书、公证和分发渠道。
+- 应用使用 Tauri 更新签名和 GitHub Releases 手动更新；不包含自动检查、自动下载或后台安装。
+- Tauri 更新签名不替代 Apple 签名与公证或 Windows 代码签名；正式稳定分发前需验证系统安全警告。
 - 仅在可信局域网使用；配对凭据需通过可信渠道短时传递，接收方需核对验证码。
 - 原生会话包保留原始 rollout，可能含工具输出、文件路径、系统提示或其他敏感内容；分享前必须检查会话。
 - 单个原生会话包最大 256 MiB，最多包含 64 个 rollout 文件。
