@@ -194,10 +194,15 @@ impl ImportService {
                 native::install_bundle_with_policy(&codex_home, &bundle, conflict_policy)
                     .map_err(map_native_error)?;
             let mut client = (self.client_factory)(project_path)?;
+            let fork_turn_id = bundle
+                .manifest
+                .cutoff_turn_id
+                .clone()
+                .or(native::source_latest_terminal_turn_id(&bundle).map_err(map_native_error)?);
             let thread_id = client.fork_thread(
                 &bundle.manifest.source_thread_id,
                 &project,
-                bundle.manifest.cutoff_turn_id.as_deref(),
+                fork_turn_id.as_deref(),
             )?;
             if thread_id == bundle.manifest.source_thread_id || thread_id.is_empty() {
                 return Err(ImportError::Codex(

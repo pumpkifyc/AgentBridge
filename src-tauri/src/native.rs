@@ -1,6 +1,7 @@
 use crate::snapshot::schema::SnapshotV1;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
@@ -349,6 +350,46 @@ pub fn parse_bundle(bytes: &[u8]) -> Result<ParsedNativeBundle, NativeBundleErro
     Ok(ParsedNativeBundle { manifest, files })
 }
 
+pub fn source_latest_terminal_turn_id(
+    bundle: &ParsedNativeBundle,
+) -> Result<Option<String>, NativeBundleError> {
+    let Some(bytes) = bundle.files.first() else {
+        return Ok(None);
+    };
+    let Some(file) = bundle.manifest.files.first() else {
+        return Ok(None);
+    };
+    let mut reader = rollout_bytes_reader(bytes, Path::new(file.relative_path.as_str()))?;
+    let mut line = String::new();
+    let mut latest_terminal_turn_id = None;
+    loop {
+        line.clear();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|error| NativeBundleError::Rollout(error.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("event_msg") {
+            continue;
+        }
+        let Some(payload) = value.get("payload") else {
+            continue;
+        };
+        let event_type = payload.get("type").and_then(Value::as_str);
+        if !matches!(event_type, Some("task_complete" | "turn_aborted" | "error")) {
+            continue;
+        }
+        if let Some(turn_id) = payload.get("turn_id").and_then(Value::as_str) {
+            latest_terminal_turn_id = Some(turn_id.to_owned());
+        }
+    }
+    Ok(latest_terminal_turn_id)
+}
+
 pub fn install_bundle(
     codex_home: &Path,
     bundle: &ParsedNativeBundle,
@@ -550,8 +591,16 @@ fn read_meta(path: &Path) -> Result<RolloutMeta, NativeBundleError> {
 }
 
 fn read_meta_bytes(bytes: &[u8], path: &Path) -> Result<RolloutMeta, NativeBundleError> {
+    let mut reader = rollout_bytes_reader(bytes, path)?;
+    read_meta_reader(&mut reader)
+}
+
+fn rollout_bytes_reader<'a>(
+    bytes: &'a [u8],
+    path: &Path,
+) -> Result<Box<dyn BufRead + 'a>, NativeBundleError> {
     let cursor = Cursor::new(bytes);
-    let mut reader: Box<dyn BufRead> = if path.extension() == Some(OsStr::new("zst")) {
+    let reader: Box<dyn BufRead + 'a> = if path.extension() == Some(OsStr::new("zst")) {
         Box::new(BufReader::new(
             zstd::stream::read::Decoder::new(cursor)
                 .map_err(|error| NativeBundleError::Rollout(error.to_string()))?,
@@ -559,7 +608,7 @@ fn read_meta_bytes(bytes: &[u8], path: &Path) -> Result<RolloutMeta, NativeBundl
     } else {
         Box::new(BufReader::new(cursor))
     };
-    read_meta_reader(&mut reader)
+    Ok(reader)
 }
 
 fn read_meta_reader(reader: &mut dyn BufRead) -> Result<RolloutMeta, NativeBundleError> {
@@ -887,8 +936,70 @@ mod tests {
     }
 
     #[test]
+    fn finds_the_last_terminal_turn_and_ignores_an_unfinished_turn() {
+        let rollout = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-1\",\"session_id\":\"thread-1\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn-1\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-2\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn-2\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-3\"}}\n"
+        );
+        let bundle = bundle_with_rollout(
+            "sessions/2026/11/13/rollout-2026-11-13T00-00-00-thread-1.jsonl",
+            rollout.as_bytes().to_vec(),
+        );
+
+        assert_eq!(
+            source_latest_terminal_turn_id(&bundle).expect("应读取终态轮次"),
+            Some("turn-2".into())
+        );
+    }
+
+    #[test]
+    fn finds_the_last_terminal_turn_in_a_compressed_rollout() {
+        let rollout = concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"thread-1\",\"session_id\":\"thread-1\"}}\n",
+            "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn-zstd\"}}\n"
+        );
+        let compressed =
+            zstd::stream::encode_all(rollout.as_bytes(), 3).expect("应压缩测试 rollout");
+        let bundle = bundle_with_rollout(
+            "sessions/2026/11/13/rollout-2026-11-13T00-00-00-thread-1.jsonl.zst",
+            compressed,
+        );
+
+        assert_eq!(
+            source_latest_terminal_turn_id(&bundle).expect("应读取压缩 rollout"),
+            Some("turn-zstd".into())
+        );
+    }
+
+    #[test]
     fn rejects_path_traversal_in_bundle() {
         assert!(validate_relative_path("sessions/../../secret.jsonl").is_err());
         assert!(validate_relative_path("/tmp/sessions/rollout-x.jsonl").is_err());
+    }
+
+    fn bundle_with_rollout(relative_path: &str, bytes: Vec<u8>) -> ParsedNativeBundle {
+        ParsedNativeBundle {
+            manifest: NativeBundleManifest {
+                schema_version: 1,
+                source_thread_id: "thread-1".into(),
+                source_session_id: "thread-1".into(),
+                title: "测试会话".into(),
+                created_at: 1,
+                updated_at: 2,
+                cutoff_turn_id: None,
+                source_working_directory: None,
+                message_count: 0,
+                preview: String::new(),
+                files: vec![NativeRolloutFile {
+                    relative_path: relative_path.into(),
+                    size: bytes.len() as u64,
+                    sha256: sha256_hex(&bytes),
+                }],
+            },
+            files: vec![bytes],
+        }
     }
 }

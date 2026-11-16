@@ -15,7 +15,7 @@ Codex 提供了公开的 App Server JSON-RPC 接口。AgentBridge 使用 `initia
 - `thread/list` 可返回本机 Codex 会话；AgentBridge 使用 `updated_at` 倒序分页，并把每一页合并为前端会话列表。请求会传入公开实验字段 `useStateDbOnly: true`，避免 Codex 0.167.2 的 rollout 扫描修复漏掉刚创建、尚无独立轮次的分支会话。实测同一分支在默认扫描模式下不返回，使用状态索引模式后可正常返回，随后仍通过 `thread/read` 和 `thread/turns/list` 读取继承历史。
 - `thread/read` 只用于读取 thread 元数据，`thread/turns/list` 用于读取轮次。历史条目改用当前公开的 `thread/items/list`，按整个 thread 分页读取后再按 `turnId` 分组。
 - `thread/read` 的 `thread.path` 可用于定位 rollout。已确认 `.jsonl` 和 `.jsonl.zst` 会出现在 `sessions/` 或 `archived_sessions/`。
-- `thread/fork` 支持按 thread ID 分叉，`lastTurnId` 可把分叉截止到指定已完成轮次，`thread/name/set` 可设置会话名称。
+- `thread/fork` 支持按 thread ID 分叉，`lastTurnId` 可把分叉截止到指定已完成轮次，`thread/name/set` 可设置会话名称。对于 `history_mode: paginated` 且包含多层 `history_base` 的完整历史，如果直接使用最新位置分叉，Codex 0.167.2 不会自动补建祖先 rollout 的投影；传入源 rollout 中最后一个终态轮次后，会在接收方物化完整祖先链。工程实现还会忽略尚未结束的最新轮次，回退到最近一个 `task_complete`、`turn_aborted` 或 `error`。
 - `thread/turns/list` 的轮次状态会保留为 `completed`、`failed`、`interrupted` 或 `inProgress`；失败和中断轮次的 `error` 会作为默认折叠的错误块进入本机预览。
 - 在临时 `CODEX_HOME` 中复制 rollout 后，`thread/read` 可读取该会话，`thread/fork` 可创建新的原生 thread；只传 `thread/fork.path` 而不先安装文件不会自动复制 rollout。
 - `thread/items/list` 当前返回条目级时间字段 `startedAtMs` 和 `completedAtMs`，单位为毫秒。AgentBridge 将其转换为界面使用的秒级时间戳，同时兼容旧的秒级字段。

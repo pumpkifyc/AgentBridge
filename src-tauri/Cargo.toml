@@ -1,6 +1,6 @@
 [package]
 name = "agentbridge"
-version = "0.1.1"
+version = "0.1.2"
 description = "局域网 Codex 会话分享工具"
 authors = ["AgentBridge"]
 edition = "2024"

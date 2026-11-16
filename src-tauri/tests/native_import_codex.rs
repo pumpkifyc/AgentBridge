@@ -98,3 +98,69 @@ fn installs_a_bundle_and_forks_a_native_thread_without_touching_real_codex_home(
 
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+#[ignore = "设置 AGENTBRIDGE_REAL_CODEX_THREAD_ID 后，验证真实多层历史分叉会物化全部祖先轮次"]
+fn full_history_fork_materializes_all_ancestor_rollout_turns_for_real_thread() {
+    let source_thread_id = std::env::var("AGENTBRIDGE_REAL_CODEX_THREAD_ID")
+        .expect("需要设置 AGENTBRIDGE_REAL_CODEX_THREAD_ID");
+    let executable = resolve_codex_executable().expect("找不到 Codex CLI，无法读取真实多层历史");
+    let real_home = native::codex_home().expect("无法定位真实 CODEX_HOME");
+    let mut real_client =
+        CodexClient::connect_with_executable_and_home(executable.clone(), &real_home)
+            .expect("启动真实 CODEX_HOME 的 Codex App Server");
+    let source_rollout_path = real_client
+        .thread_rollout_path(&source_thread_id)
+        .expect("读取真实会话 rollout 路径");
+    let source_turns = real_client
+        .list_turns(&source_thread_id)
+        .expect("读取真实分享源轮次");
+    assert!(source_turns.len() > 1, "真实分享源应包含多个祖先轮次");
+    let mut source_snapshot = snapshot();
+    source_snapshot.metadata.source_thread_id = source_thread_id.clone();
+    let bundle = native::build_bundle(
+        &real_home,
+        std::path::Path::new(&source_rollout_path),
+        &source_snapshot,
+    )
+    .expect("构建真实完整历史包");
+    let parsed = native::parse_bundle(&bundle).expect("解析真实完整历史包");
+    assert!(
+        parsed.files.len() > 1,
+        "真实多层会话应包含多个 rollout 文件"
+    );
+
+    let root = unique_dir("full-history");
+    let codex_home = root.join("codex-home");
+    fs::create_dir_all(&codex_home).expect("创建临时 CODEX_HOME");
+    native::install_bundle(&codex_home, &parsed).expect("安装真实完整历史包");
+    let project = root.join("receiver-project");
+    fs::create_dir_all(&project).expect("创建接收方项目");
+    let mut client = CodexClient::connect_with_executable_and_home(executable, &codex_home)
+        .expect("启动临时 CODEX_HOME 的 Codex App Server");
+    let latest_terminal_turn = native::source_latest_terminal_turn_id(&parsed)
+        .expect("读取最新终态轮次")
+        .expect("完整历史应包含终态轮次");
+    let fork_id = client
+        .fork_thread(
+            &parsed.manifest.source_thread_id,
+            project.to_str().expect("项目路径应为 UTF-8"),
+            Some(&latest_terminal_turn),
+        )
+        .expect("按最新终态轮次创建原生历史分支");
+    let turns = client.list_turns(&fork_id).expect("读取本机分支轮次");
+
+    assert_eq!(
+        turns
+            .iter()
+            .map(|turn| turn.id.as_str())
+            .collect::<Vec<_>>(),
+        source_turns
+            .iter()
+            .map(|turn| turn.id.as_str())
+            .collect::<Vec<_>>(),
+        "原生分叉必须包含完整祖先轮次"
+    );
+
+    let _ = fs::remove_dir_all(root);
+}

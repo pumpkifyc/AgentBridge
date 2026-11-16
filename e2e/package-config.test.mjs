@@ -55,9 +55,12 @@ test("普通构建与正式更新构建分离", () => {
 });
 
 test("正式发布版本在三处配置中保持一致", () => {
-  assert.equal(packageJson.version, "0.1.1");
-  assert.equal(config.version, "0.1.1");
-  assert.match(cargo, /^version = "0\.1\.1"$/m);
+  assert.match(packageJson.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(config.version, packageJson.version);
+  assert.match(
+    cargo,
+    new RegExp(`^version = "${packageJson.version.replaceAll(".", "\\.")}"$`, "m"),
+  );
 });
 
 test("版本标签触发双平台签名发布", () => {

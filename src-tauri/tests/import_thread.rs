@@ -196,6 +196,55 @@ fn conflicting_local_rollout_is_restored_after_fork_uses_the_packaged_snapshot()
 }
 
 #[test]
+fn full_history_import_forks_through_the_latest_completed_turn() {
+    let dir = unique_dir("full-history-fork-boundary");
+    let project = dir.join("receiver-project");
+    fs::create_dir_all(&project).expect("创建接收方项目");
+    let codex_home = dir.join("codex-home");
+    let sessions = codex_home.join("sessions/2026/11/13");
+    fs::create_dir_all(&sessions).expect("创建测试 CODEX_HOME");
+    let rollout = sessions.join("rollout-2026-11-13T00-00-00-source-thread.jsonl");
+    fs::write(
+        &rollout,
+        concat!(
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"source-thread\",\"session_id\":\"source-thread\"}}\n",
+            "{\"ordinal\":1,\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-final\"}}\n",
+            "{\"ordinal\":2,\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"turn-final\"}}\n"
+        ),
+    )
+    .expect("写入完整历史 rollout");
+    let mut full_history = snapshot();
+    full_history.metadata.cutoff_turn_id = None;
+    let bundle =
+        native::build_bundle(&codex_home, &rollout, &full_history).expect("构建完整历史会话包");
+    let bundle_file = dir.join("full-history.agbridge");
+    fs::write(&bundle_file, &bundle).expect("写入完整历史会话包");
+    let observed = Arc::new(Mutex::new(None));
+    let observed_by_client = Arc::clone(&observed);
+    let database = ImportDatabase::open(dir.join("imports.db")).expect("数据库可打开");
+    let service = ImportService::with_client_factory(
+        Box::new(move |_| {
+            Ok(Box::new(ForkBoundaryRecordingClient {
+                observed: Arc::clone(&observed_by_client),
+            }))
+        }),
+        Box::new(|| "local-thread-full-history".to_owned()),
+    )
+    .with_codex_home(codex_home);
+
+    service
+        .create_local_thread(&bundle, &project, &bundle_file, &database)
+        .expect("完整历史会话应创建本机原生会话");
+
+    assert_eq!(
+        *observed.lock().expect("读取分叉边界"),
+        Some("turn-final".into()),
+        "完整历史导入必须按末个已完成 turn 分叉，才能让 Codex 补建祖先历史"
+    );
+    fs::remove_dir_all(&dir).expect("清理测试目录");
+}
+
+#[test]
 fn custom_import_name_is_used_for_the_native_thread_and_persisted() {
     let dir = unique_dir("custom-name");
     let project = dir.join("receiver-project");
@@ -295,6 +344,26 @@ impl LocalCodexClient for NameRecordingClient {
     fn set_thread_name(&mut self, thread_id: &str, name: &str) -> Result<(), ImportError> {
         assert_eq!(thread_id, "local-thread-custom-name");
         *self.name.lock().expect("保存名称") = name.to_owned();
+        Ok(())
+    }
+}
+
+struct ForkBoundaryRecordingClient {
+    observed: Arc<Mutex<Option<String>>>,
+}
+
+impl LocalCodexClient for ForkBoundaryRecordingClient {
+    fn fork_thread(
+        &mut self,
+        _source_thread_id: &str,
+        _cwd: &str,
+        last_turn_id: Option<&str>,
+    ) -> Result<String, ImportError> {
+        *self.observed.lock().expect("保存分叉边界") = last_turn_id.map(str::to_owned);
+        Ok("local-thread-full-history".into())
+    }
+
+    fn set_thread_name(&mut self, _thread_id: &str, _name: &str) -> Result<(), ImportError> {
         Ok(())
     }
 }
